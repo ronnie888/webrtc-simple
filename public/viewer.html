@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live</title>
+  <style>
+    html,body{margin:0;background:#000;height:100%}
+    video{width:100%;height:100%;object-fit:contain;background:#000}
+    #s{position:fixed;top:8px;left:8px;color:#0f0;font:12px monospace}
+  </style>
+</head>
+<body>
+  <video id="v" autoplay playsinline muted controls></video>
+  <div id="s">connecting…</div>
+  <script>
+    const status = (t) => document.getElementById('s').textContent = t;
+    // WS served same-origin via nginx /ws proxy.
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+    let pc, iceServers = [];
+
+    ws.onopen = () => { status('ws open'); ws.send(JSON.stringify({ id: 'watch' })); };
+    ws.onclose = () => status('ws closed');
+    ws.onerror = () => status('ws error');
+
+    ws.onmessage = async (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.id === 'iceServers') {
+        iceServers = msg.iceServers;
+        pc = new RTCPeerConnection({ iceServers });
+        pc.ontrack = (ev) => { document.getElementById('v').srcObject = ev.streams[0]; status('playing'); };
+        pc.onicecandidate = (ev) => { if (ev.candidate) ws.send(JSON.stringify({ id: 'ice', candidate: ev.candidate })); };
+        pc.oniceconnectionstatechange = () => status('ice: ' + pc.iceConnectionState);
+        pc.addTransceiver('video', { direction: 'recvonly' });
+        pc.addTransceiver('audio', { direction: 'recvonly' });
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        ws.send(JSON.stringify({ id: 'offer', sdp: offer.sdp }));
+      } else if (msg.id === 'answer') {
+        await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+      } else if (msg.id === 'ice') {
+        try { await pc.addIceCandidate(msg.candidate); } catch (err) { console.warn(err); }
+      } else if (msg.id === 'error') {
+        status('error: ' + msg.message);
+      }
+    };
+  </script>
+</body>
+</html>
