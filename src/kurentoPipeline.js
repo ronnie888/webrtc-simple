@@ -8,16 +8,33 @@ class KurentoPipeline {
     this.player = null;
     this.passthrough = null;
     this.viewers = new Map(); // id -> WebRtcEndpoint
+    this._initPromise = null;
   }
 
-  // Idempotent: build pipeline+player+passthrough once, reuse forever.
+  // Idempotent + concurrency-safe: build pipeline+player+passthrough once,
+  // share one in-flight build among concurrent callers, reuse forever.
   async ensurePlayer() {
     if (this.pipeline && this.player && this.passthrough) return;
-    this.pipeline = await this.client.create('MediaPipeline');
-    this.player = await this.pipeline.create('PlayerEndpoint', { uri: this.rtmpSource });
-    this.passthrough = await this.pipeline.create('PassThrough');
-    await this.player.connect(this.passthrough);
-    await this.player.play();
+    if (this._initPromise) return this._initPromise;
+
+    this._initPromise = (async () => {
+      const pipeline = await this.client.create('MediaPipeline');
+      const player = await pipeline.create('PlayerEndpoint', { uri: this.rtmpSource });
+      const passthrough = await pipeline.create('PassThrough');
+      await player.connect(passthrough);
+      await player.play();
+      // Commit only after every step succeeded.
+      this.pipeline = pipeline;
+      this.player = player;
+      this.passthrough = passthrough;
+    })();
+
+    try {
+      await this._initPromise;
+    } catch (err) {
+      this._initPromise = null; // allow retry on next call
+      throw err;
+    }
   }
 
   async addViewer(id) {

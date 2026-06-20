@@ -72,3 +72,16 @@ test('removeViewer releases only that endpoint', async () => {
   const player = client._created.find((o) => o.type === 'PlayerEndpoint');
   assert.strictEqual(player.released, false, 'player must survive viewer removal');
 });
+
+test('concurrent ensurePlayer builds the pipeline only once', async () => {
+  const client = makeFakeKurento();
+  const kp = new KurentoPipeline({ client, rtmpSource: 'rtmp://localhost/live/stream' });
+
+  // Fire many ensurePlayer calls on the same tick.
+  await Promise.all(Array.from({ length: 5 }, () => kp.ensurePlayer()));
+
+  const players = client._created.filter((o) => o.type === 'PlayerEndpoint');
+  const passthroughs = client._created.filter((o) => o.type === 'PassThrough');
+  assert.strictEqual(players.length, 1, 'exactly one PlayerEndpoint');
+  assert.strictEqual(passthroughs.length, 1, 'exactly one PassThrough');
+});
