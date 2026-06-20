@@ -17,12 +17,19 @@ function handleConnection(ws, { pipeline, iceServers }) {
       if (msg.id === 'watch') {
         if (watching) return; // idempotent: ignore repeat watch
         watching = true;
-        send({ id: 'iceServers', iceServers });
-        endpoint = await pipeline.addViewer(viewerId);
+        try {
+          endpoint = await pipeline.addViewer(viewerId);
+        } catch (err) {
+          watching = false; // unwedge: allow the client to retry watch
+          throw err;
+        }
         // Kurento -> browser trickle ICE
         endpoint.on('OnIceCandidate', (event) => {
           send({ id: 'ice', candidate: event.candidate });
         });
+        // Send iceServers ONLY after the endpoint exists, so the browser
+        // cannot produce its offer before we are ready to processOffer.
+        send({ id: 'iceServers', iceServers });
       } else if (msg.id === 'offer') {
         if (!endpoint) return send({ id: 'error', message: 'not watching' });
         const answer = await endpoint.processOffer(msg.sdp);

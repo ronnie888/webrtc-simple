@@ -18,6 +18,7 @@ sudo docker rm -f kurento-media-server 2>/dev/null || true
 sudo docker run -d --name kurento-media-server --network host --restart always \
   --ulimit nofile=65536:65536 --log-opt max-size=50m --log-opt max-file=5 \
   -e KMS_STUN_IP=stun.l.google.com -e KMS_STUN_PORT=19302 \
+  -e KMS_EXTERNAL_IP="${PUBLIC_IP}" \
   kurento/kurento-media-server:7.0
 sudo iptables -I INPUT -p tcp --dport 8888 -j ACCEPT || true
 sudo iptables -I INPUT -p udp --dport 5000:65535 -j ACCEPT || true
