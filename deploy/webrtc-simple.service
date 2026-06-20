@@ -1,0 +1,18 @@
+# deploy/webrtc-simple.service
+[Unit]
+Description=webrtc-simple signaling server
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/webrtc-simple
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=3
+Environment=SIGNALING_PORT=3000
+Environment=KURENTO_WS=ws://localhost:8888/kurento
+Environment=RTMP_SOURCE=rtmp://localhost/live/stream
+# setup.sh appends PUBLIC_IP / TURN_* via a drop-in.
+
+[Install]
+WantedBy=multi-user.target
