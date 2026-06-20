@@ -28,7 +28,8 @@ function makeFakePipeline() {
   return {
     endpoint,
     removed,
-    addViewer: async () => endpoint,
+    addViewerCount: 0,
+    addViewer: async function () { this.addViewerCount++; return endpoint; },
     removeViewer: async (id) => { removed.push(id); },
   };
 }
@@ -75,4 +76,17 @@ test('on close: releases the viewer', async () => {
   await new Promise((r) => setImmediate(r));
 
   assert.strictEqual(pipeline.removed.length, 1, 'one viewer released on close');
+});
+
+test('double watch does not create a second viewer (idempotent)', async () => {
+  const ws = makeFakeWs();
+  const pipeline = makeFakePipeline();
+  handleConnection(ws, { pipeline, iceServers: [] });
+
+  ws.emit('message', JSON.stringify({ id: 'watch' }));
+  ws.emit('message', JSON.stringify({ id: 'watch' }));
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+
+  assert.strictEqual(pipeline.addViewerCount, 1, 'only one viewer created for repeated watch');
 });

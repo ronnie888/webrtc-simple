@@ -5,6 +5,7 @@ let counter = 0;
 function handleConnection(ws, { pipeline, iceServers }) {
   const viewerId = 'viewer-' + (++counter);
   let endpoint = null;
+  let watching = false;
 
   const send = (obj) => ws.send(JSON.stringify(obj));
 
@@ -14,6 +15,8 @@ function handleConnection(ws, { pipeline, iceServers }) {
 
     try {
       if (msg.id === 'watch') {
+        if (watching) return; // idempotent: ignore repeat watch
+        watching = true;
         send({ id: 'iceServers', iceServers });
         endpoint = await pipeline.addViewer(viewerId);
         // Kurento -> browser trickle ICE
@@ -34,6 +37,7 @@ function handleConnection(ws, { pipeline, iceServers }) {
   });
 
   ws.on('close', async () => {
+    if (!watching) return;
     try { await pipeline.removeViewer(viewerId); } catch { /* best effort */ }
   });
 }
