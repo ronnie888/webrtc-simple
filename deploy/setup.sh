@@ -26,7 +26,10 @@ sudo iptables -I INPUT -p udp --dport 5000:65535 -j ACCEPT || true
 echo "== 3. node app =="
 sudo mkdir -p /opt/webrtc-simple
 sudo cp -r "$REPO_DIR"/src "$REPO_DIR"/config.js "$REPO_DIR"/package.json /opt/webrtc-simple/
-( cd /opt/webrtc-simple && sudo npm install --omit=dev )
+# kurento-client ships a postinstall (scripts/install-kurento.js) that is absent
+# in some published tarballs and aborts npm with exit 127. It is not needed at
+# runtime (pure JS), so skip lifecycle scripts.
+( cd /opt/webrtc-simple && sudo npm install --omit=dev --ignore-scripts )
 sudo mkdir -p /var/www/webrtc-simple
 sudo cp "$REPO_DIR/public/viewer.html" /var/www/webrtc-simple/
 
