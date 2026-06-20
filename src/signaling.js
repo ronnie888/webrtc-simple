@@ -23,8 +23,9 @@ function handleConnection(ws, { pipeline, iceServers }) {
           watching = false; // unwedge: allow the client to retry watch
           throw err;
         }
-        // Kurento -> browser trickle ICE
-        endpoint.on('OnIceCandidate', (event) => {
+        // Kurento -> browser trickle ICE. Kurento 7.x emits 'IceCandidateFound'
+        // (the old 'OnIceCandidate' name is rejected: "doesn't accept events of type").
+        endpoint.on('IceCandidateFound', (event) => {
           send({ id: 'ice', candidate: event.candidate });
         });
         // Send iceServers ONLY after the endpoint exists, so the browser
