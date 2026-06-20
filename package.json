@@ -1,0 +1,15 @@
+{
+  "name": "webrtc-simple",
+  "version": "1.0.0",
+  "description": "Minimal Kurento WebRTC: OBS RTMP in, browser viewers out. Single VPS, no security.",
+  "type": "commonjs",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "kurento-client": "^7.0.0",
+    "ws": "^8.18.0"
+  }
+}

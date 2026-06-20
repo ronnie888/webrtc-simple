@@ -1,0 +1,20 @@
+// All tunables in one place. Override via env on the VPS.
+module.exports = {
+  // Node signaling server
+  signalingPort: parseInt(process.env.SIGNALING_PORT || '3000', 10),
+
+  // Kurento Media Server WebSocket (local Docker, host network)
+  kurentoWsUri: process.env.KURENTO_WS || 'ws://localhost:8888/kurento',
+
+  // Source the PlayerEndpoint pulls. nginx-RTMP runs on the same box.
+  rtmpSource: process.env.RTMP_SOURCE || 'rtmp://localhost/live/stream',
+
+  // ICE servers handed to the browser. PUBLIC_IP must be the VPS public IP.
+  publicIp: process.env.PUBLIC_IP || '127.0.0.1',
+  stun: process.env.STUN_URL || 'stun:stun.l.google.com:19302',
+  turn: {
+    url: process.env.TURN_URL || 'turn:127.0.0.1:3478',
+    username: process.env.TURN_USER || 'webrtc',
+    credential: process.env.TURN_PASS || 'changeme',
+  },
+};
