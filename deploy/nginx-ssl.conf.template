@@ -1,0 +1,85 @@
+# HTTPS + iframe-embed whitelist config for webrtc-simple.
+# setup-ssl.sh substitutes __DOMAIN__, __PARTNERS_REFERER__, __PARTNERS_CSP__
+# and writes the result to /etc/nginx/nginx.conf, then reloads.
+#
+# Loads the RTMP dynamic module; pinned to ONE worker so the published RTMP
+# stream is visible to /stat and Kurento's pull (streams are not shared across
+# nginx workers).
+load_module modules/ngx_rtmp_module.so;
+worker_processes 1;
+events { worker_connections 4096; }
+
+rtmp {
+    server {
+        listen 1935;
+        chunk_size 4096;
+        application live {
+            live on;
+            wait_key on;
+            wait_video on;
+            sync 10ms;
+            allow publish all;
+            allow play all;
+        }
+    }
+}
+
+http {
+    # ---- iframe embed whitelist (referer gate) ----
+    # $embed_ok = 1 only when the Referer (the iframe parent page) is a partner.
+    # Empty referer (direct URL hit, curl) and any non-partner domain → 0 → 403.
+    map $http_referer $embed_ok {
+        default                 0;
+__PARTNERS_REFERER__
+    }
+
+    # ---- HTTP :80 → redirect to HTTPS (keep acme challenge for renew) ----
+    server {
+        listen 80;
+        server_name __DOMAIN__;
+        location ^~ /.well-known/acme-challenge/ { root /var/www/certbot; }
+        location / { return 301 https://$host$request_uri; }
+    }
+
+    # ---- HTTPS :443 ----
+    server {
+        listen 443 ssl;
+        http2 on;
+        server_name __DOMAIN__;
+
+        ssl_certificate     /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+
+        root /var/www/webrtc-simple;
+        index viewer.html;
+
+        # Browser-enforced embed control: only these origins may frame us.
+        add_header Content-Security-Policy "frame-ancestors __PARTNERS_CSP__;" always;
+
+        # Server-side referer gate on the viewer page.
+        location / {
+            if ($embed_ok = 0) { return 403; }
+            try_files $uri $uri/ =404;
+        }
+
+        # WebSocket signaling (WSS) → Node :3000, also referer-gated.
+        location /ws {
+            if ($embed_ok = 0) { return 403; }
+            proxy_pass http://127.0.0.1:3000;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_read_timeout 3600s;
+        }
+
+        # RTMP stat — localhost only, for debugging (not partner-gated).
+        location /stat {
+            allow 127.0.0.1;
+            deny all;
+            rtmp_stat all;
+        }
+    }
+}
