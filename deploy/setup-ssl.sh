@@ -31,31 +31,27 @@ sudo certbot certonly --webroot -w /var/www/certbot \
   -d "$DOMAIN" --email "$EMAIL" --agree-tos -n --no-eff-email
 
 echo "== 4. build referer map + CSP list from PARTNERS =="
-# Referer map lines: match http(s)://(www.)?partner with anything after.
-REFERER_LINES=""
+# Write the nginx referer-map lines to a temp file (avoids embedding newlines
+# in a shell variable). CSP_LIST is a single space-separated line, safe in a var.
+REFERER_FILE="$(mktemp)"
 CSP_LIST=""
 for p in $PARTNERS; do
-  # escape dots for the nginx regex
-  esc="$(printf '%s' "$p" | sed 's/\./\\./g')"
-  REFERER_LINES="${REFERER_LINES}        ~*^https?://(www\\.)?${esc}  1;"$'\n'
+  esc="$(printf '%s' "$p" | sed 's/\./\\./g')"        # escape dots for nginx regex
+  printf '        ~*^https?://(www\\.)?%s  1;\n' "$esc" >> "$REFERER_FILE"
   CSP_LIST="${CSP_LIST}https://${p} https://www.${p} "
 done
-CSP_LIST="$(printf '%s' "$CSP_LIST" | sed 's/[[:space:]]*$//')"
+CSP_LIST="$(printf '%s' "$CSP_LIST" | sed 's/ *$//')"
 
 echo "== 5. render nginx-ssl.conf from template =="
 TMP="$(mktemp)"
 cp "$REPO_DIR/deploy/nginx-ssl.conf.template" "$TMP"
-# Substitute domain (plain), CSP list (plain). Referer block via awk to keep
-# the multi-line content intact.
 sed -i "s/__DOMAIN__/${DOMAIN}/g" "$TMP"
-# CSP list may contain slashes → use | as sed delimiter.
 sed -i "s|__PARTNERS_CSP__|${CSP_LIST}|g" "$TMP"
-# Replace the __PARTNERS_REFERER__ marker line with the generated map lines.
-awk -v repl="$REFERER_LINES" '
-  /__PARTNERS_REFERER__/ { printf "%s", repl; next }
-  { print }
-' "$TMP" | sudo tee /etc/nginx/nginx.conf >/dev/null
-rm -f "$TMP"
+# Replace the __PARTNERS_REFERER__ marker line with the file's contents.
+awk 'NR==FNR { lines = lines $0 ORS; next }
+     /__PARTNERS_REFERER__/ { printf "%s", lines; next }
+     { print }' "$REFERER_FILE" "$TMP" | sudo tee /etc/nginx/nginx.conf >/dev/null
+rm -f "$TMP" "$REFERER_FILE"
 
 echo "== 6. test + reload =="
 sudo nginx -t
