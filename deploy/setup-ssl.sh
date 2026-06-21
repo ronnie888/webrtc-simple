@@ -67,7 +67,8 @@ echo -e '#!/bin/sh\nsystemctl reload nginx' | sudo tee /etc/letsencrypt/renewal-
 sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 sudo systemctl enable --now certbot.timer 2>/dev/null || true
 
+FIRST_PARTNER="${PARTNERS%% *}"   # first domain in the list
 echo "== done =="
 echo "HTTPS viewer:   https://${DOMAIN}/   (only embeddable from: ${PARTNERS})"
-echo "Verify allowed: curl -sI https://${DOMAIN}/ -H 'Referer: https://$(echo $PARTNERS | awk '{print $1}')/' | head -1   (expect 200)"
-echo "Verify blocked: curl -sI https://${DOMAIN}/                                                      | head -1   (expect 403)"
+echo "Verify allowed: curl -sI https://${DOMAIN}/ -H 'Referer: https://${FIRST_PARTNER}/' | head -1   (expect 200)"
+echo "Verify blocked: curl -sI https://${DOMAIN}/ | head -1   (expect 403)"
