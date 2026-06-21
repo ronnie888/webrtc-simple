@@ -10,7 +10,7 @@
 set -euo pipefail
 
 DOMAIN="${DOMAIN:?set DOMAIN to the hostname pointing at this VPS}"
-EMAIL="${EMAIL:?set EMAIL for the Let's Encrypt account}"
+EMAIL="${EMAIL:?set EMAIL for the Lets Encrypt account}"
 PARTNERS="${PARTNERS:?set PARTNERS to a space-separated list of embed domains}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -57,7 +57,7 @@ echo "== 6. test + reload =="
 sudo nginx -t
 sudo systemctl reload nginx
 
-echo "== 7. cert auto-renew (certbot timer reloads nginx on renew) =="
+echo "== 7. cert auto-renew via certbot timer =="
 sudo mkdir -p /etc/letsencrypt/renewal-hooks/deploy
 echo -e '#!/bin/sh\nsystemctl reload nginx' | sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh >/dev/null
 sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
