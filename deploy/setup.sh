@@ -20,8 +20,20 @@ sudo docker run -d --name kurento-media-server --network host --restart always \
   -e KMS_STUN_IP=stun.l.google.com -e KMS_STUN_PORT=19302 \
   -e KMS_EXTERNAL_IP="${PUBLIC_IP}" \
   kurento/kurento-media-server:7.0
-sudo iptables -I INPUT -p tcp --dport 8888 -j ACCEPT || true
-sudo iptables -I INPUT -p udp --dport 5000:65535 -j ACCEPT || true
+echo "== 2b. firewall (host iptables) =="
+# Open every port the stack needs. NOTE: on OCI/cloud VPSes you must ALSO add
+# matching ingress rules in the cloud Security List / NSG (web console) — host
+# iptables alone is not enough behind a cloud firewall.
+sudo iptables -I INPUT -p tcp --dport 8888 -j ACCEPT || true          # Kurento WS (local use)
+sudo iptables -I INPUT -p udp --dport 5000:65535 -j ACCEPT || true    # Kurento media
+sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT || true            # viewer page / acme
+sudo iptables -I INPUT -p tcp --dport 443 -j ACCEPT || true           # HTTPS (after setup-ssl.sh)
+sudo iptables -I INPUT -p tcp --dport 1935 -j ACCEPT || true          # OBS RTMP ingest
+sudo iptables -I INPUT -p tcp --dport 3478 -j ACCEPT || true          # TURN
+sudo iptables -I INPUT -p udp --dport 3478 -j ACCEPT || true          # TURN
+sudo iptables -I INPUT -p udp --dport 49152:65535 -j ACCEPT || true   # TURN relay
+sudo apt-get install -y iptables-persistent >/dev/null 2>&1 || true
+sudo netfilter-persistent save >/dev/null 2>&1 || true
 
 echo "== 3. node app =="
 sudo mkdir -p /opt/webrtc-simple
@@ -59,6 +71,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now webrtc-simple
 
 echo "== done =="
-echo "OBS push to:  rtmp://${PUBLIC_IP}:1935/live  stream key: stream"
-echo "Viewers open: http://${PUBLIC_IP}/"
+echo "1) Start OBS push FIRST:  rtmp://${PUBLIC_IP}:1935/live   stream key: stream"
+echo "2) Then open viewers:     http://${PUBLIC_IP}/"
 echo "Kurento check: curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8888/kurento  (expect 426)"
+echo "Source check:  curl -s http://localhost/stat | grep bw_video   (nonzero once OBS pushes)"
+echo "NOTE: if signaling started before OBS, the player rebuilds automatically on the"
+echo "      next viewer connect (dead-source detection). If video still blank, restart:"
+echo "      sudo systemctl restart webrtc-simple"
+echo "For HTTPS + iframe whitelist, after DNS points here run deploy/setup-ssl.sh"

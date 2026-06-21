@@ -21,8 +21,10 @@ git clone <repo> webrtc-simple && cd webrtc-simple
 PUBLIC_IP=<vps-public-ip> TURN_PASS=<pick-a-secret> bash deploy/setup.sh
 ```
 
-Open these in the cloud firewall (OCI security list / NSG):
-- TCP 80 (viewer page), 1935 (RTMP ingest), 3478 (TURN), 8888 (Kurento, local only — optional)
+`setup.sh` opens the host iptables ports for you. On a cloud VPS you must ALSO
+add matching ingress rules in the **cloud firewall** (OCI Security List / NSG) —
+host iptables alone is not enough behind a cloud edge:
+- TCP 80 (viewer/acme), 443 (HTTPS), 1935 (RTMP ingest), 3478 (TURN)
 - UDP 3478 (TURN), 5000-65535 (Kurento media), 49152-65535 (TURN relay)
 
 ## OBS settings
@@ -31,9 +33,29 @@ Open these in the cloud firewall (OCI security list / NSG):
 - Server: `rtmp://<vps-public-ip>:1935/live`
 - Stream Key: `stream`
 
+**Push OBS first, then open viewers.** If signaling started before the source
+was live, the player auto-rebuilds on the next viewer connect (dead-source
+detection). If video is still blank: `sudo systemctl restart webrtc-simple`.
+
+## HTTPS + iframe embed whitelist (optional)
+
+After DNS for your domain points at the VPS:
+
+```bash
+DOMAIN=yourdomain.com EMAIL=you@example.com \
+  PARTNERS="partner1.com partner2.net" bash deploy/setup-ssl.sh
+```
+
+Issues a Let's Encrypt cert (auto-renewing) and locks the viewer so it only
+loads inside an `<iframe>` on a whitelisted partner domain (referer gate + CSP
+`frame-ancestors`). Direct URL hits and non-partner embeds get 403. Add a
+partner later by re-running with the new `PARTNERS` list. WSS is automatic on
+HTTPS (viewer.html picks `wss://`).
+
 ## Watch
 
-Open `http://<vps-public-ip>/` in Chrome. Status overlay shows `ws open` → `ice: connected` → `playing`.
+Open `http://<vps-public-ip>/` (or `https://<domain>/` after setup-ssl.sh) in
+Chrome. Status overlay shows `ws open` → `ice: connected` → `playing`.
 
 ## Verify
 
