@@ -5,31 +5,43 @@ const assert = require('node:assert');
 // Minimal fake kurento-client. create(type) returns an object whose type we record.
 function makeFakeKurento() {
   const created = [];
-  const pipeline = {
-    create: async (type) => {
-      const obj = {
-        type,
-        connectedTo: [],
-        released: false,
-        connect: async (sink) => { obj.connectedTo.push(sink); },
-        release: async () => { obj.released = true; },
-        play: async () => {},
-        // WebRtcEndpoint API used by signaling later (stubbed here)
-        processOffer: async () => 'ANSWER_SDP',
-        gatherCandidates: async () => {},
-        on: () => {},
-        addIceCandidate: async () => {},
-      };
-      created.push(obj);
-      return obj;
-    },
+  const makeObj = (type) => {
+    const obj = {
+      type,
+      connectedTo: [],
+      released: false,
+      handlers: {},
+      connect: async (sink) => { obj.connectedTo.push(sink); },
+      release: async () => { obj.released = true; },
+      play: async () => {},
+      // WebRtcEndpoint API used by signaling later (stubbed here)
+      processOffer: async () => 'ANSWER_SDP',
+      gatherCandidates: async () => {},
+      on: (evt, cb) => { obj.handlers[evt] = cb; },
+      emit: (evt, data) => { if (obj.handlers[evt]) obj.handlers[evt](data); },
+      addIceCandidate: async () => {},
+    };
+    return obj;
   };
+
+  // Each call to makeFakeKurento() gets its own pipeline factory so that
+  // rebuildPlayer() (which calls client.create('MediaPipeline') again) gets a
+  // fresh pipeline with its own create scope that still pushes into `created`.
   const client = {
     create: async (type) => {
-      if (type === 'MediaPipeline') return pipeline;
+      if (type === 'MediaPipeline') {
+        const pipeline = {
+          create: async (t) => {
+            const obj = makeObj(t);
+            created.push(obj);
+            return obj;
+          },
+          release: async () => {},
+        };
+        return pipeline;
+      }
       throw new Error('unexpected top-level create: ' + type);
     },
-    _pipeline: pipeline,
     _created: created,
   };
   return client;
@@ -84,4 +96,30 @@ test('concurrent ensurePlayer builds the pipeline only once', async () => {
   const passthroughs = client._created.filter((o) => o.type === 'PassThrough');
   assert.strictEqual(players.length, 1, 'exactly one PlayerEndpoint');
   assert.strictEqual(passthroughs.length, 1, 'exactly one PassThrough');
+});
+
+test('player Error event marks player dead; next addViewer rebuilds', async () => {
+  const client = makeFakeKurento();
+  const kp = new KurentoPipeline({ client, rtmpSource: 'rtmp://localhost/live/stream' });
+  await kp.ensurePlayer();
+  const firstPlayer = client._created.find((o) => o.type === 'PlayerEndpoint');
+
+  // Simulate the RTMP source being dead: PlayerEndpoint fires Error.
+  firstPlayer.emit('Error', { description: 'rtmp read failed' });
+
+  // A viewer connecting now should trigger a rebuild (fresh pipeline+player).
+  await kp.addViewer('v1');
+  const players = client._created.filter((o) => o.type === 'PlayerEndpoint');
+  assert.strictEqual(players.length, 2, 'a second PlayerEndpoint built after rebuild');
+  assert.strictEqual(firstPlayer.released, true, 'old (dead) player released on rebuild');
+});
+
+test('healthy player is NOT rebuilt on addViewer', async () => {
+  const client = makeFakeKurento();
+  const kp = new KurentoPipeline({ client, rtmpSource: 'rtmp://localhost/live/stream' });
+  await kp.ensurePlayer();
+  await kp.addViewer('v1');
+  await kp.addViewer('v2');
+  const players = client._created.filter((o) => o.type === 'PlayerEndpoint');
+  assert.strictEqual(players.length, 1, 'no rebuild while player healthy');
 });
