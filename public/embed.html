@@ -1,40 +1,81 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Live</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Live Stream</title>
   <style>
-    html,body{margin:0;background:#000;height:100%}
-    video{width:100%;height:100%;object-fit:contain;background:#000}
-    #s{position:fixed;top:8px;left:8px;color:#0f0;font:12px monospace}
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden; background: #000;
+      /* no text selection / drag */
+      -webkit-user-select: none; -moz-user-select: none; user-select: none;
+    }
+    #remoteVideo {
+      width: 100%; height: 100%; object-fit: contain; background: #000;
+      pointer-events: none;            /* swallow clicks: no native menu, no scrub */
+      -webkit-user-select: none; user-select: none;
+    }
+    .loading-overlay {
+      position: fixed; inset: 0; background: #000;
+      display: flex; align-items: center; justify-content: center;
+      z-index: 100; transition: opacity 0.3s;
+    }
+    .loading-overlay.hidden { opacity: 0; pointer-events: none; }
+    .spinner {
+      width: 46px; height: 46px; border-radius: 50%;
+      border: 4px solid rgba(255,255,255,0.15);
+      border-top-color: rgba(255,255,255,0.85);
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error-overlay {
+      position: fixed; inset: 0; background: #000; color: #ffcf6b;
+      display: none; align-items: center; justify-content: center;
+      z-index: 200; font: 14px system-ui, sans-serif; text-align: center; padding: 24px;
+    }
+    .error-overlay.show { display: flex; }
   </style>
 </head>
 <body>
-  <video id="v" autoplay playsinline muted controls></video>
-  <div id="s">connecting…</div>
+  <!-- No controls; PiP/remote-playback/download disabled; pointer-events:none blocks the right-click menu. -->
+  <video id="remoteVideo" autoplay playsinline webkit-playsinline muted
+         x-webkit-airplay="deny" disablePictureInPicture disableRemotePlayback
+         controlsList="nodownload noremoteplayback nofullscreen"></video>
+
+  <div id="loadingOverlay" class="loading-overlay"><div class="spinner"></div></div>
+  <div id="errorOverlay" class="error-overlay"><div id="errorText">Connection failed</div></div>
+
   <script>
-    const status = (t) => document.getElementById('s').textContent = t;
-    // Token from the URL (?lt=...) is forwarded to the WS connect; the server
-    // enforces it at the handshake (no valid token => no video).
+    // Belt-and-suspenders: block the context menu everywhere (no "Save video as", no PiP entry).
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
+    document.addEventListener('dragstart', (e) => e.preventDefault());
+
+    const video = document.getElementById('remoteVideo');
+    const loading = document.getElementById('loadingOverlay');
+    const errorOverlay = document.getElementById('errorOverlay');
+    const errorText = document.getElementById('errorText');
+    const showError = (t) => { errorText.textContent = t; errorOverlay.classList.add('show'); };
+    const hideLoading = () => loading.classList.add('hidden');
+
+    // Token from ?lt= forwarded to the WS connect; server enforces it at the handshake.
     const lt = new URLSearchParams(location.search).get('lt') || '';
     const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://')
       + location.host + '/ws' + (lt ? ('?lt=' + encodeURIComponent(lt)) : '');
     const ws = new WebSocket(wsUrl);
     let pc, iceServers = [];
 
-    ws.onopen = () => { status('ws open'); ws.send(JSON.stringify({ id: 'watch' })); };
-    ws.onclose = () => status('ws closed');
-    ws.onerror = () => status('ws error');
+    ws.onopen = () => ws.send(JSON.stringify({ id: 'watch' }));
+    ws.onclose = () => { if (!video.srcObject) showError('Disconnected'); };
+    ws.onerror = () => showError('Connection error');
 
     ws.onmessage = async (e) => {
       const msg = JSON.parse(e.data);
       if (msg.id === 'iceServers') {
         iceServers = msg.iceServers;
         pc = new RTCPeerConnection({ iceServers });
-        pc.ontrack = (ev) => { document.getElementById('v').srcObject = ev.streams[0]; status('playing'); };
+        pc.ontrack = (ev) => { video.srcObject = ev.streams[0]; hideLoading(); };
         pc.onicecandidate = (ev) => { if (ev.candidate) ws.send(JSON.stringify({ id: 'ice', candidate: ev.candidate })); };
-        pc.oniceconnectionstatechange = () => status('ice: ' + pc.iceConnectionState);
         pc.addTransceiver('video', { direction: 'recvonly' });
         pc.addTransceiver('audio', { direction: 'recvonly' });
         const offer = await pc.createOffer();
@@ -45,7 +86,7 @@
       } else if (msg.id === 'ice') {
         try { await pc.addIceCandidate(msg.candidate); } catch (err) { console.warn(err); }
       } else if (msg.id === 'error') {
-        status('error: ' + msg.message);
+        showError(/token/i.test(msg.message) ? 'Access denied' : ('Error: ' + msg.message));
       }
     };
   </script>
