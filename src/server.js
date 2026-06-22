@@ -6,9 +6,14 @@ const config = require('../config');
 const { KurentoPipeline } = require('./kurentoPipeline');
 const { handleConnection } = require('./signaling');
 
+// Advertise TURN over BOTH UDP and TCP. Telegram/iOS in-app webviews and locked-
+// down mobile networks often block UDP entirely, so without a TURN-TCP candidate
+// ICE never forms a working pair → WS connects but video stays black. The TCP
+// variant lets media relay over coturn's TCP listener (:3478).
 const iceServers = [
   { urls: config.stun },
   { urls: config.turn.url, username: config.turn.username, credential: config.turn.credential },
+  { urls: config.turn.url + '?transport=tcp', username: config.turn.username, credential: config.turn.credential },
 ];
 
 async function main() {
