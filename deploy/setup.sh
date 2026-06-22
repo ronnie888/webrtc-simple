@@ -51,8 +51,13 @@ sudo nginx -t
 sudo systemctl restart nginx
 
 echo "== 5. coturn =="
+# Private IP of the NIC carrying media (where Kurento lives) — for the relay
+# allow-list that prevents the "403 Forbidden IP" black-video bug.
+PRIVATE_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)"
+PRIVATE_IP="${PRIVATE_IP:-$PUBLIC_IP}"
 sudo cp "$REPO_DIR/deploy/turnserver.conf" /etc/turnserver.conf
-sudo sed -i "s/PUBLIC_IP_PLACEHOLDER/${PUBLIC_IP}/" /etc/turnserver.conf
+sudo sed -i "s/PUBLIC_IP_PLACEHOLDER/${PUBLIC_IP}/g" /etc/turnserver.conf   # g: external-ip + allowed-peer-ip
+sudo sed -i "s/PRIVATE_IP_PLACEHOLDER/${PRIVATE_IP}/g" /etc/turnserver.conf
 sudo sed -i "s/^user=.*/user=${TURN_USER}:${TURN_PASS}/" /etc/turnserver.conf
 echo 'TURNSERVER_ENABLED=1' | sudo tee /etc/default/coturn
 sudo systemctl restart coturn
