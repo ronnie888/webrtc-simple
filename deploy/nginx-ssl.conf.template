@@ -46,6 +46,12 @@ __PARTNERS_REFERER__
     map $http_origin $origin_ok {
         default                 0;
         "null"                  1;
+        # SELF-ORIGIN: the embed page runs ON this domain, so its WebSocket
+        # handshake carries Origin: https://<this-domain> — NOT the partner's.
+        # This is the common no-token case (Telegram/iOS/any browser loading the
+        # embed): the page was already partner-gated (CSP frame-ancestors + the
+        # referer map on the parent), and a same-origin WS is always legitimate.
+        "https://__DOMAIN__"    1;
 __PARTNERS_ORIGIN__
     }
 
