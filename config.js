@@ -3,6 +3,9 @@ module.exports = {
   // Node signaling server
   signalingPort: parseInt(process.env.SIGNALING_PORT || '3000', 10),
 
+  // Localhost-only metrics endpoint (GET /count) for load testing.
+  metricsPort: parseInt(process.env.METRICS_PORT || '3001', 10),
+
   // Kurento Media Server WebSocket (local Docker, host network)
   kurentoWsUri: process.env.KURENTO_WS || 'ws://localhost:8888/kurento',
 

@@ -1,4 +1,5 @@
 // src/server.js
+const http = require('http');
 const kurento = require('kurento-client');
 const { WebSocketServer } = require('ws');
 const config = require('../config');
@@ -24,6 +25,19 @@ async function main() {
       token = u.searchParams.get('lt');
     } catch { /* no token */ }
     handleConnection(ws, { pipeline, iceServers, token, tokens: config.embedTokens });
+  });
+
+  // Lightweight metrics endpoint (localhost) for load testing: exact live
+  // viewer count = WebRtcEndpoints in the pipeline. GET /count -> JSON.
+  http.createServer((req, res) => {
+    if (req.url === '/count') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ viewers: pipeline.viewers.size, playerDead: pipeline.playerDead }));
+    } else {
+      res.writeHead(404); res.end();
+    }
+  }).listen(config.metricsPort, '127.0.0.1', () => {
+    console.log(`metrics on 127.0.0.1:${config.metricsPort}/count`);
   });
 
   console.log(`signaling on :${config.signalingPort}, kurento ${config.kurentoWsUri}, source ${config.rtmpSource}`);
