@@ -35,6 +35,16 @@ sudo iptables -I INPUT -p udp --dport 49152:65535 -j ACCEPT || true   # TURN rel
 sudo apt-get install -y iptables-persistent >/dev/null 2>&1 || true
 sudo netfilter-persistent save >/dev/null 2>&1 || true
 
+echo "== 2c. kernel/network tuning for viewer surges (persisted) =="
+# Bigger accept queue + wide ephemeral port range so the box absorbs bursts of
+# new viewers without dropping/500ing connections. Persisted so it survives reboot.
+sudo tee /etc/sysctl.d/99-webrtc.conf >/dev/null <<'SYSCTL'
+net.core.somaxconn=65535
+net.ipv4.tcp_max_syn_backlog=65535
+net.ipv4.ip_local_port_range=1024 65535
+SYSCTL
+sudo sysctl -p /etc/sysctl.d/99-webrtc.conf >/dev/null 2>&1 || true
+
 echo "== 3. node app =="
 sudo mkdir -p /opt/webrtc-simple
 sudo cp -r "$REPO_DIR"/src "$REPO_DIR"/config.js "$REPO_DIR"/package.json /opt/webrtc-simple/

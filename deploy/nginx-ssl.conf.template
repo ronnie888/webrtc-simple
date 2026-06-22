@@ -8,7 +8,13 @@
 # nginx workers).
 load_module modules/ngx_rtmp_module.so;
 worker_processes 1;
-events { worker_connections 4096; }
+# High fd limit + connections so a single worker survives viewer surges. Each
+# viewer uses several conns (embed page + WS + keepalive); the OS default soft
+# limit of 1024 fds exhausts fast under load → nginx 500s on plain static GETs
+# ("too many open files"). MUST live in this template — setup-ssl.sh regenerates
+# nginx.conf from here on every run, so any out-of-band tuning gets wiped.
+worker_rlimit_nofile 65535;
+events { worker_connections 16384; }
 
 rtmp {
     server {
