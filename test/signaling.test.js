@@ -41,7 +41,7 @@ function makeFakePipeline() {
 test('on watch: sends iceServers then answer for an offer', async () => {
   const ws = makeFakeWs();
   const pipeline = makeFakePipeline();
-  handleConnection(ws, { pipeline, iceServers: [{ urls: 'stun:x' }] });
+  handleConnection(ws, { pool: pipeline, iceServers: [{ urls: 'stun:x' }] });
 
   ws.emit('message', JSON.stringify({ id: 'watch' }));
   await new Promise((r) => setImmediate(r));
@@ -57,7 +57,7 @@ test('on watch: sends iceServers then answer for an offer', async () => {
 test('on ice from viewer: forwards candidate to endpoint', async () => {
   const ws = makeFakeWs();
   const pipeline = makeFakePipeline();
-  handleConnection(ws, { pipeline, iceServers: [] });
+  handleConnection(ws, { pool: pipeline, iceServers: [] });
 
   ws.emit('message', JSON.stringify({ id: 'watch' }));
   await new Promise((r) => setImmediate(r));
@@ -72,7 +72,7 @@ test('on ice from viewer: forwards candidate to endpoint', async () => {
 test('on close: releases the viewer', async () => {
   const ws = makeFakeWs();
   const pipeline = makeFakePipeline();
-  handleConnection(ws, { pipeline, iceServers: [] });
+  handleConnection(ws, { pool: pipeline, iceServers: [] });
 
   ws.emit('message', JSON.stringify({ id: 'watch' }));
   await new Promise((r) => setImmediate(r));
@@ -85,7 +85,7 @@ test('on close: releases the viewer', async () => {
 test('double watch does not create a second viewer (idempotent)', async () => {
   const ws = makeFakeWs();
   const pipeline = makeFakePipeline();
-  handleConnection(ws, { pipeline, iceServers: [] });
+  handleConnection(ws, { pool: pipeline, iceServers: [] });
 
   ws.emit('message', JSON.stringify({ id: 'watch' }));
   ws.emit('message', JSON.stringify({ id: 'watch' }));
@@ -98,7 +98,7 @@ test('double watch does not create a second viewer (idempotent)', async () => {
 test('token gate: valid token in list is allowed to watch', async () => {
   const ws = makeFakeWs();
   const pipeline = makeFakePipeline();
-  handleConnection(ws, { pipeline, iceServers: [], token: 'GOODTOK', tokens: ['GOODTOK','OTHER'] });
+  handleConnection(ws, { pool: pipeline, iceServers: [], token: 'GOODTOK', tokens: ['GOODTOK','OTHER'] });
   ws.emit('message', JSON.stringify({ id: 'watch' }));
   await new Promise((r) => setImmediate(r));
   assert.strictEqual(pipeline.addViewerCount, 1, 'valid token => viewer created');
@@ -107,7 +107,7 @@ test('token gate: valid token in list is allowed to watch', async () => {
 test('token gate: invalid token is rejected, no viewer, ws closed', async () => {
   const ws = makeFakeWs();
   const pipeline = makeFakePipeline();
-  handleConnection(ws, { pipeline, iceServers: [], token: 'WRONG', tokens: ['GOODTOK'] });
+  handleConnection(ws, { pool: pipeline, iceServers: [], token: 'WRONG', tokens: ['GOODTOK'] });
   ws.emit('message', JSON.stringify({ id: 'watch' }));
   await new Promise((r) => setImmediate(r));
   assert.strictEqual(pipeline.addViewerCount, 0, 'invalid token => no viewer');
@@ -120,7 +120,7 @@ test('token is OPTIONAL: missing token is allowed (partner bare-URL embeds)', as
   // (Referer/Origin). A missing token must NOT be rejected here.
   const ws = makeFakeWs();
   const pipeline = makeFakePipeline();
-  handleConnection(ws, { pipeline, iceServers: [], token: null, tokens: ['GOODTOK'] });
+  handleConnection(ws, { pool: pipeline, iceServers: [], token: null, tokens: ['GOODTOK'] });
   ws.emit('message', JSON.stringify({ id: 'watch' }));
   await new Promise((r) => setImmediate(r));
   assert.strictEqual(pipeline.addViewerCount, 1, 'no token => still allowed');
@@ -129,7 +129,7 @@ test('token is OPTIONAL: missing token is allowed (partner bare-URL embeds)', as
 test('token gate disabled (empty tokens) allows watch without token', async () => {
   const ws = makeFakeWs();
   const pipeline = makeFakePipeline();
-  handleConnection(ws, { pipeline, iceServers: [], token: null, tokens: [] });
+  handleConnection(ws, { pool: pipeline, iceServers: [], token: null, tokens: [] });
   ws.emit('message', JSON.stringify({ id: 'watch' }));
   await new Promise((r) => setImmediate(r));
   assert.strictEqual(pipeline.addViewerCount, 1, 'empty tokens => gate off => allowed');
@@ -138,7 +138,7 @@ test('token gate disabled (empty tokens) allows watch without token', async () =
 test('endpoint error event is handled (no throw) and closes the ws', async () => {
   const ws = makeFakeWs();
   const pipeline = makeFakePipeline();
-  handleConnection(ws, { pipeline, iceServers: [] });
+  handleConnection(ws, { pool: pipeline, iceServers: [] });
   ws.emit('message', JSON.stringify({ id: 'watch' }));
   await new Promise((r) => setImmediate(r));
 

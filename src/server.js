@@ -4,6 +4,7 @@ const kurento = require('kurento-client');
 const { WebSocketServer } = require('ws');
 const config = require('../config');
 const { KurentoPipeline } = require('./kurentoPipeline');
+const { KurentoPool } = require('./kurentoPool');
 const { handleConnection } = require('./signaling');
 
 // Advertise TURN over BOTH UDP and TCP. Telegram/iOS in-app webviews and locked-
@@ -17,10 +18,16 @@ const iceServers = [
 ];
 
 async function main() {
-  const client = await kurento(config.kurentoWsUri);
-  const pipeline = new KurentoPipeline({ client, rtmpSource: config.rtmpSource });
-  // Build the source eagerly so the first viewer is fast; tolerate source-not-ready.
-  try { await pipeline.ensurePlayer(); } catch (e) { console.error('ensurePlayer (will retry on viewer):', e.message); }
+  // One KurentoPipeline per Kurento instance (8888,8889,...), wrapped in a pool
+  // that shards viewers least-loaded → connect setup parallelizes across them.
+  const pipelines = [];
+  for (const uri of config.kurentoUris) {
+    const client = await kurento(uri);
+    pipelines.push(new KurentoPipeline({ client, rtmpSource: config.rtmpSource }));
+  }
+  const pool = new KurentoPool({ pipelines });
+  // Build each source eagerly so first viewers are fast; tolerate source-not-ready.
+  try { await pool.ensureAll(); } catch (e) { console.error('ensureAll (will retry on viewer):', e.message); }
 
   const wss = new WebSocketServer({ port: config.signalingPort });
   wss.on('connection', (ws, req) => {
@@ -29,15 +36,15 @@ async function main() {
       const u = new URL(req.url, 'http://localhost');
       token = u.searchParams.get('lt');
     } catch { /* no token */ }
-    handleConnection(ws, { pipeline, iceServers, token, tokens: config.embedTokens });
+    handleConnection(ws, { pool, iceServers, token, tokens: config.embedTokens });
   });
 
-  // Lightweight metrics endpoint (localhost) for load testing: exact live
-  // viewer count = WebRtcEndpoints in the pipeline. GET /count -> JSON.
+  // Lightweight metrics endpoint (localhost) for load testing. GET /count -> JSON
+  // with the fleet total and the per-instance breakdown (to confirm even spread).
   http.createServer((req, res) => {
     if (req.url === '/count') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ viewers: pipeline.viewers.size, playerDead: pipeline.playerDead }));
+      res.end(JSON.stringify({ viewers: pool.totalViewers(), perInstance: pool.perInstanceCounts() }));
     } else {
       res.writeHead(404); res.end();
     }
@@ -45,7 +52,7 @@ async function main() {
     console.log(`metrics on 127.0.0.1:${config.metricsPort}/count`);
   });
 
-  console.log(`signaling on :${config.signalingPort}, kurento ${config.kurentoWsUri}, source ${config.rtmpSource}`);
+  console.log(`signaling on :${config.signalingPort}, ${config.kurentoUris.length} kurento [${config.kurentoUris.join(', ')}], source ${config.rtmpSource}`);
 }
 
 // Backstop: never let a single async/endpoint error kill the whole server and

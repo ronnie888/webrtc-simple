@@ -6,8 +6,11 @@ module.exports = {
   // Localhost-only metrics endpoint (GET /count) for load testing.
   metricsPort: parseInt(process.env.METRICS_PORT || '3001', 10),
 
-  // Kurento Media Server WebSocket (local Docker, host network)
-  kurentoWsUri: process.env.KURENTO_WS || 'ws://localhost:8888/kurento',
+  // Kurento Media Server WebSocket(s). Multiple instances on this node run on
+  // 8888,8889,... — each Kurento serializes connect setup, so N instances =
+  // N× parallel connect handling. Comma-list via env; default single instance.
+  kurentoUris: (process.env.KURENTO_URIS || process.env.KURENTO_WS || 'ws://localhost:8888/kurento')
+    .split(',').map((u) => u.trim()).filter(Boolean),
 
   // Source the PlayerEndpoint pulls. nginx-RTMP runs on the same box.
   rtmpSource: process.env.RTMP_SOURCE || 'rtmp://localhost/live/stream',

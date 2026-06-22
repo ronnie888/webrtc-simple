@@ -1,8 +1,10 @@
 // src/signaling.js
-// Translates WS JSON <-> pipeline calls. One viewer per connection.
+// Translates WS JSON <-> media calls. One viewer per connection. `pool` shards
+// viewers least-loaded across N Kurento instances (KurentoPool); it exposes the
+// same addViewer(id)/removeViewer(id) surface as a single KurentoPipeline.
 let counter = 0;
 
-function handleConnection(ws, { pipeline, iceServers, token = null, tokens = [] }) {
+function handleConnection(ws, { pool, iceServers, token = null, tokens = [] }) {
   const viewerId = 'viewer-' + (++counter);
   let endpoint = null;
   let watching = false;
@@ -27,7 +29,7 @@ function handleConnection(ws, { pipeline, iceServers, token = null, tokens = [] 
         if (watching) return; // idempotent: ignore repeat watch
         watching = true;
         try {
-          endpoint = await pipeline.addViewer(viewerId);
+          endpoint = await pool.addViewer(viewerId);
         } catch (err) {
           watching = false; // unwedge: allow the client to retry watch
           throw err;
@@ -64,7 +66,7 @@ function handleConnection(ws, { pipeline, iceServers, token = null, tokens = [] 
 
   ws.on('close', async () => {
     if (!watching) return;
-    try { await pipeline.removeViewer(viewerId); } catch { /* best effort */ }
+    try { await pool.removeViewer(viewerId); } catch { /* best effort */ }
   });
 }
 
