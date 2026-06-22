@@ -62,11 +62,33 @@ class KurentoPipeline {
     // If the PlayerEndpoint signalled failure, rebuild before attaching the viewer
     // so the viewer gets a fresh pipeline with a live RTMP pull.
     if (this.playerDead) await this.rebuildPlayer();
+    try {
+      return await this._attachViewer(id);
+    } catch (err) {
+      // The shared MediaPipeline can vanish from Kurento (process restart, OOM,
+      // GC) WITHOUT firing the PlayerEndpoint 'Error' event, so playerDead stays
+      // false and the stale ref throws "MediaPipeline not found" / "MediaObject
+      // not found". Detect that, rebuild once, and retry so viewers self-heal
+      // instead of every connect failing forever.
+      if (this._isStalePipeline(err)) {
+        await this.rebuildPlayer();
+        return await this._attachViewer(id);
+      }
+      throw err;
+    }
+  }
+
+  async _attachViewer(id) {
     await this.ensurePlayer();
     const endpoint = await this.pipeline.create('WebRtcEndpoint');
     await this.passthrough.connect(endpoint);
     this.viewers.set(id, endpoint);
     return endpoint;
+  }
+
+  _isStalePipeline(err) {
+    const m = String((err && err.message) || err || '');
+    return /not found/i.test(m) || /MediaObject/i.test(m) || /MediaPipeline/i.test(m);
   }
 
   async removeViewer(id) {

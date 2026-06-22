@@ -123,3 +123,38 @@ test('healthy player is NOT rebuilt on addViewer', async () => {
   const players = client._created.filter((o) => o.type === 'PlayerEndpoint');
   assert.strictEqual(players.length, 1, 'no rebuild while player healthy');
 });
+
+test('addViewer self-heals when the MediaPipeline vanished (not-found, no Error event)', async () => {
+  // Client whose pipeline's WebRtcEndpoint create throws "not found" ONCE
+  // (stale pipeline), succeeds after a rebuild. playerDead is never set —
+  // simulating Kurento dropping the pipeline without firing PlayerEndpoint Error.
+  let pipelineGen = 0;
+  const created = [];
+  const makeEp = (t) => ({ type: t, connectedTo: [], released: false,
+    connect: async function (s) { this.connectedTo.push(s); },
+    release: async () => {}, play: async () => {}, on: () => {} });
+  const client = {
+    _created: created,
+    create: async (type) => {
+      if (type !== 'MediaPipeline') throw new Error('unexpected: ' + type);
+      const myGen = ++pipelineGen;
+      return {
+        create: async (t) => {
+          // First pipeline generation: building player/passthrough is fine, but
+          // creating a viewer WebRtcEndpoint fails as "not found" (stale pipeline).
+          if (myGen === 1 && t === 'WebRtcEndpoint') {
+            throw new Error("Object '...kurento.MediaPipeline' not found");
+          }
+          const o = makeEp(t); created.push(o); return o;
+        },
+        release: async () => {},
+      };
+    },
+  };
+  const kp = new KurentoPipeline({ client, rtmpSource: 'rtmp://localhost/live/stream' });
+  await kp.ensurePlayer();
+
+  const ep = await kp.addViewer('v1');   // first attach throws not-found -> rebuild -> retry
+  assert.strictEqual(ep.type, 'WebRtcEndpoint', 'viewer attached after self-heal rebuild');
+  assert.strictEqual(pipelineGen, 2, 'pipeline was rebuilt exactly once');
+});
