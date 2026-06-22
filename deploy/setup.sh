@@ -66,6 +66,7 @@ Environment=PUBLIC_IP=${PUBLIC_IP}
 Environment=TURN_URL=turn:${PUBLIC_IP}:3478
 Environment=TURN_USER=${TURN_USER}
 Environment=TURN_PASS=${TURN_PASS}
+Environment=EMBED_TOKENS=${EMBED_TOKENS:-}
 EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now webrtc-simple

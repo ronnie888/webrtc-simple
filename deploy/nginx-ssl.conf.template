@@ -58,15 +58,31 @@ __PARTNERS_REFERER__
         # Browser-enforced embed control: only these origins may frame us.
         add_header Content-Security-Policy "frame-ancestors __PARTNERS_CSP__;" always;
 
-        # Server-side referer gate on the viewer page.
+        # Plain viewer: partner-iframe only (referer gate).
+        location = / {
+            if ($embed_ok = 0) { return 403; }
+            try_files /viewer.html =404;
+        }
+
+        # Token-gated embed page: served to anyone; access is enforced by the
+        # token at the WS handshake (?lt=...), NOT by the referer whitelist.
+        location = /embed {
+            try_files /embed.html =404;
+        }
+
+        # Static assets for the partner-gated viewer.
         location / {
             if ($embed_ok = 0) { return 403; }
             try_files $uri $uri/ =404;
         }
 
-        # WebSocket signaling (WSS) → Node :3000, also referer-gated.
+        # WebSocket signaling (WSS) → Node :3000. Allowed when EITHER a partner
+        # referer (plain viewer) OR an ?lt= token is present (embed). The Node
+        # signaling server validates the token; bad tokens are rejected there.
         location /ws {
-            if ($embed_ok = 0) { return 403; }
+            if ($embed_ok = 0) { set $ws_block 1; }
+            if ($arg_lt != "") { set $ws_block 0; }
+            if ($ws_block = 1) { return 403; }
             proxy_pass http://127.0.0.1:3000;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
