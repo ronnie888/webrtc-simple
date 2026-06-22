@@ -15,7 +15,11 @@ function handleConnection(ws, { pipeline, iceServers, token = null, tokens = [] 
 
     try {
       if (msg.id === 'watch') {
-        if (Array.isArray(tokens) && tokens.length > 0 && !tokens.includes(token)) {
+        // Token is OPTIONAL: partner embeds use the bare /embed URL with NO token
+        // and are gated at nginx (partner Referer/Origin + self-origin). The ?lt=
+        // token is for testing/direct access. So only reject when a token IS
+        // supplied but is NOT in the allow-list; a missing token passes through.
+        if (token && Array.isArray(tokens) && tokens.length > 0 && !tokens.includes(token)) {
           send({ id: 'error', message: 'invalid token' });
           try { ws.close(); } catch { /* ignore */ }
           return;

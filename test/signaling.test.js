@@ -115,13 +115,15 @@ test('token gate: invalid token is rejected, no viewer, ws closed', async () => 
   assert.ok(err && /token/i.test(err.message), 'sends a token error');
 });
 
-test('token gate: missing token rejected when tokens configured', async () => {
+test('token is OPTIONAL: missing token is allowed (partner bare-URL embeds)', async () => {
+  // Partners use the bare /embed URL with NO token; they are gated at nginx
+  // (Referer/Origin). A missing token must NOT be rejected here.
   const ws = makeFakeWs();
   const pipeline = makeFakePipeline();
   handleConnection(ws, { pipeline, iceServers: [], token: null, tokens: ['GOODTOK'] });
   ws.emit('message', JSON.stringify({ id: 'watch' }));
   await new Promise((r) => setImmediate(r));
-  assert.strictEqual(pipeline.addViewerCount, 0, 'no token => no viewer');
+  assert.strictEqual(pipeline.addViewerCount, 1, 'no token => still allowed');
 });
 
 test('token gate disabled (empty tokens) allows watch without token', async () => {
