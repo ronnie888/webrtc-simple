@@ -20,11 +20,13 @@ function makeFakeWs() {
 
 // Fake pipeline matching KurentoPipeline's surface used by signaling.
 function makeFakePipeline() {
+  const handlers = {};
   const endpoint = {
     processOffer: async () => 'ANSWER_SDP',
     gatherCandidates: async () => {},
     addIceCandidate: async () => { endpoint.addedIce = true; },
-    on: (evt, cb) => { endpoint.onIce = cb; }, // OnIceCandidate
+    on: (evt, cb) => { handlers[evt] = cb; },          // store per-event
+    emit: (evt, data) => handlers[evt] && handlers[evt](data),
   };
   const removed = [];
   return {
@@ -129,4 +131,17 @@ test('token gate disabled (empty tokens) allows watch without token', async () =
   ws.emit('message', JSON.stringify({ id: 'watch' }));
   await new Promise((r) => setImmediate(r));
   assert.strictEqual(pipeline.addViewerCount, 1, 'empty tokens => gate off => allowed');
+});
+
+test('endpoint error event is handled (no throw) and closes the ws', async () => {
+  const ws = makeFakeWs();
+  const pipeline = makeFakePipeline();
+  handleConnection(ws, { pipeline, iceServers: [] });
+  ws.emit('message', JSON.stringify({ id: 'watch' }));
+  await new Promise((r) => setImmediate(r));
+
+  // Simulate Kurento emitting 'error' on the endpoint under load. This MUST NOT
+  // throw out of the handler (which would crash the process in production).
+  assert.doesNotThrow(() => pipeline.endpoint.emit('error', new Error('Request has timed out')));
+  assert.strictEqual(ws.closed, true, 'ws is closed after a media error');
 });

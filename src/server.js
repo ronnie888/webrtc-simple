@@ -43,4 +43,15 @@ async function main() {
   console.log(`signaling on :${config.signalingPort}, kurento ${config.kurentoWsUri}, source ${config.rtmpSource}`);
 }
 
+// Backstop: never let a single async/endpoint error kill the whole server and
+// disconnect every viewer. Log and keep serving. (Per-endpoint errors are also
+// handled in signaling.js; this catches anything that slips through, e.g. a
+// Kurento client timeout emitted outside a try/catch under heavy load.)
+process.on('uncaughtException', (err) => {
+  console.error('uncaughtException (kept alive):', err && err.message ? err.message : err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandledRejection (kept alive):', reason && reason.message ? reason.message : reason);
+});
+
 main().catch((e) => { console.error('fatal:', e); process.exit(1); });
