@@ -36,10 +36,16 @@ __PARTNERS_REFERER__
 
     # WebSocket UPGRADE requests carry an Origin header (the iframe parent), NOT
     # a Referer — so the referer map above 403s real iframe WS handshakes. This
-    # parallel map gates /ws on Origin so partner iframes connect even without a
-    # token. Same partner list, matched against $http_origin.
+    # parallel map gates /ws on Origin so partner iframes connect WITHOUT a token.
+    # Same partner list, matched against $http_origin.
+    #   "null"  → Telegram/iOS in-app webviews (and sandboxed iframes) send
+    #             Origin: null. The PAGE that opened the WS was already partner-
+    #             gated (referer map on /embed's parent + CSP frame-ancestors),
+    #             so allowing null here lets Telegram/iOS embeds play without a
+    #             token. (Token stays available for direct/testing access.)
     map $http_origin $origin_ok {
         default                 0;
+        "null"                  1;
 __PARTNERS_ORIGIN__
     }
 
