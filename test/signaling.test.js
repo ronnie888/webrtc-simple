@@ -140,8 +140,8 @@ test('endpoint error event is handled (no throw) and closes the ws', async () =>
   ws.emit('message', JSON.stringify({ id: 'watch' }));
   await new Promise((r) => setImmediate(r));
 
-  // Simulate Kurento emitting 'error' on the endpoint under load. This MUST NOT
-  // throw out of the handler (which would crash the process in production).
-  assert.doesNotThrow(() => pipeline.endpoint.emit('error', new Error('Request has timed out')));
+  // Simulate Kurento emitting its 'Error' media event on the endpoint under
+  // load. This MUST NOT throw out of the handler (would crash the process).
+  assert.doesNotThrow(() => pipeline.endpoint.emit('Error', { description: 'Request has timed out' }));
   assert.strictEqual(ws.closed, true, 'ws is closed after a media error');
 });

@@ -33,12 +33,12 @@ function handleConnection(ws, { pipeline, iceServers, token = null, tokens = [] 
         endpoint.on('IceCandidateFound', (event) => {
           send({ id: 'ice', candidate: event.candidate });
         });
-        // CRITICAL: a WebRtcEndpoint is an EventEmitter. Under load, Kurento can
-        // time out a subscribe/op and emit 'error' on the endpoint. With NO
-        // 'error' listener, Node treats it as an unhandled 'error' event and
-        // CRASHES THE WHOLE PROCESS (systemd then restarts → every viewer drops).
-        // Swallow per-endpoint errors here so one bad viewer can't take down all.
-        endpoint.on('error', (err) => {
+        // CRITICAL: under load Kurento can fail an op on the endpoint. Kurento 7.x
+        // names this event 'Error' (PascalCase) — NOT 'error' (lowercase 'error'
+        // is rejected by the endpoint: "doesn't accept events of type 'error'",
+        // same gotcha as IceCandidateFound vs OnIceCandidate). Subscribe to the
+        // real event so one bad viewer can't crash the whole process.
+        endpoint.on('Error', () => {
           try { send({ id: 'error', message: 'media error' }); } catch { /* ws may be gone */ }
           try { ws.close(); } catch { /* ignore */ }
         });
