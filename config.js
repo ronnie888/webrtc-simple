@@ -17,4 +17,7 @@ module.exports = {
     username: process.env.TURN_USER || 'webrtc',
     credential: process.env.TURN_PASS || 'changeme',
   },
+
+  // Shared access tokens for /embed (comma-separated). Empty = gate disabled.
+  embedTokens: (process.env.EMBED_TOKENS || '').split(',').map((t) => t.trim()).filter(Boolean),
 };

@@ -7,13 +7,15 @@ const { handleConnection } = require('../src/signaling');
 function makeFakeWs() {
   const sent = [];
   const handlers = {};
-  return {
+  const ws = {
     sent,
     send: (str) => sent.push(JSON.parse(str)),
     on: (evt, cb) => { handlers[evt] = cb; },
     emit: (evt, data) => handlers[evt] && handlers[evt](data),
-    close: () => handlers.close && handlers.close(),
+    close: () => { ws.closed = true; handlers.close && handlers.close(); },
+    closed: false,
   };
+  return ws;
 }
 
 // Fake pipeline matching KurentoPipeline's surface used by signaling.
@@ -89,4 +91,42 @@ test('double watch does not create a second viewer (idempotent)', async () => {
   await new Promise((r) => setImmediate(r));
 
   assert.strictEqual(pipeline.addViewerCount, 1, 'only one viewer created for repeated watch');
+});
+
+test('token gate: valid token in list is allowed to watch', async () => {
+  const ws = makeFakeWs();
+  const pipeline = makeFakePipeline();
+  handleConnection(ws, { pipeline, iceServers: [], token: 'GOODTOK', tokens: ['GOODTOK','OTHER'] });
+  ws.emit('message', JSON.stringify({ id: 'watch' }));
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(pipeline.addViewerCount, 1, 'valid token => viewer created');
+});
+
+test('token gate: invalid token is rejected, no viewer, ws closed', async () => {
+  const ws = makeFakeWs();
+  const pipeline = makeFakePipeline();
+  handleConnection(ws, { pipeline, iceServers: [], token: 'WRONG', tokens: ['GOODTOK'] });
+  ws.emit('message', JSON.stringify({ id: 'watch' }));
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(pipeline.addViewerCount, 0, 'invalid token => no viewer');
+  const err = ws.sent.find((m) => m.id === 'error');
+  assert.ok(err && /token/i.test(err.message), 'sends a token error');
+});
+
+test('token gate: missing token rejected when tokens configured', async () => {
+  const ws = makeFakeWs();
+  const pipeline = makeFakePipeline();
+  handleConnection(ws, { pipeline, iceServers: [], token: null, tokens: ['GOODTOK'] });
+  ws.emit('message', JSON.stringify({ id: 'watch' }));
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(pipeline.addViewerCount, 0, 'no token => no viewer');
+});
+
+test('token gate disabled (empty tokens) allows watch without token', async () => {
+  const ws = makeFakeWs();
+  const pipeline = makeFakePipeline();
+  handleConnection(ws, { pipeline, iceServers: [], token: null, tokens: [] });
+  ws.emit('message', JSON.stringify({ id: 'watch' }));
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(pipeline.addViewerCount, 1, 'empty tokens => gate off => allowed');
 });

@@ -2,7 +2,7 @@
 // Translates WS JSON <-> pipeline calls. One viewer per connection.
 let counter = 0;
 
-function handleConnection(ws, { pipeline, iceServers }) {
+function handleConnection(ws, { pipeline, iceServers, token = null, tokens = [] }) {
   const viewerId = 'viewer-' + (++counter);
   let endpoint = null;
   let watching = false;
@@ -15,6 +15,11 @@ function handleConnection(ws, { pipeline, iceServers }) {
 
     try {
       if (msg.id === 'watch') {
+        if (Array.isArray(tokens) && tokens.length > 0 && !tokens.includes(token)) {
+          send({ id: 'error', message: 'invalid token' });
+          try { ws.close(); } catch { /* ignore */ }
+          return;
+        }
         if (watching) return; // idempotent: ignore repeat watch
         watching = true;
         try {

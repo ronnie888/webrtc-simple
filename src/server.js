@@ -17,7 +17,14 @@ async function main() {
   try { await pipeline.ensurePlayer(); } catch (e) { console.error('ensurePlayer (will retry on viewer):', e.message); }
 
   const wss = new WebSocketServer({ port: config.signalingPort });
-  wss.on('connection', (ws) => handleConnection(ws, { pipeline, iceServers }));
+  wss.on('connection', (ws, req) => {
+    let token = null;
+    try {
+      const u = new URL(req.url, 'http://localhost');
+      token = u.searchParams.get('lt');
+    } catch { /* no token */ }
+    handleConnection(ws, { pipeline, iceServers, token, tokens: config.embedTokens });
+  });
 
   console.log(`signaling on :${config.signalingPort}, kurento ${config.kurentoWsUri}, source ${config.rtmpSource}`);
 }
