@@ -30,14 +30,17 @@ echo "== 3. issue certificate (HTTP-01 webroot) =="
 sudo certbot certonly --webroot -w /var/www/certbot \
   -d "$DOMAIN" --email "$EMAIL" --agree-tos -n --no-eff-email
 
-echo "== 4. build referer map + CSP list from PARTNERS =="
-# Write the nginx referer-map lines to a temp file (avoids embedding newlines
-# in a shell variable). CSP_LIST is a single space-separated line, safe in a var.
+echo "== 4. build referer + origin maps + CSP list from PARTNERS =="
+# Referer map (page loads carry Referer) and Origin map (WS handshakes carry
+# Origin, not Referer) — both gated on the same partner list. Written to temp
+# files to avoid embedding newlines in shell vars.
 REFERER_FILE="$(mktemp)"
+ORIGIN_FILE="$(mktemp)"
 CSP_LIST=""
 for p in $PARTNERS; do
   esc="$(printf '%s' "$p" | sed 's/\./\\./g')"        # escape dots for nginx regex
   printf '        ~*^https?://(www\\.)?%s  1;\n' "$esc" >> "$REFERER_FILE"
+  printf '        ~*^https?://(www\\.)?%s  1;\n' "$esc" >> "$ORIGIN_FILE"
   CSP_LIST="${CSP_LIST}https://${p} https://www.${p} "
 done
 CSP_LIST="$(printf '%s' "$CSP_LIST" | sed 's/ *$//')"
@@ -47,11 +50,14 @@ TMP="$(mktemp)"
 cp "$REPO_DIR/deploy/nginx-ssl.conf.template" "$TMP"
 sed -i "s/__DOMAIN__/${DOMAIN}/g" "$TMP"
 sed -i "s|__PARTNERS_CSP__|${CSP_LIST}|g" "$TMP"
-# Replace the __PARTNERS_REFERER__ marker line with the file's contents.
-awk 'NR==FNR { lines = lines $0 ORS; next }
-     /__PARTNERS_REFERER__/ { printf "%s", lines; next }
-     { print }' "$REFERER_FILE" "$TMP" | sudo tee /etc/nginx/nginx.conf >/dev/null
-rm -f "$TMP" "$REFERER_FILE"
+# Replace the two marker lines with their generated map contents.
+awk 'NR==FNR { ref = ref $0 ORS; next }
+     /__PARTNERS_REFERER__/ { printf "%s", ref; next }
+     { print }' "$REFERER_FILE" "$TMP" > "${TMP}.r"
+awk -v of="$ORIGIN_FILE" 'BEGIN { while ((getline l < of) > 0) org = org l ORS }
+     /__PARTNERS_ORIGIN__/ { printf "%s", org; next }
+     { print }' "${TMP}.r" | sudo tee /etc/nginx/nginx.conf >/dev/null
+rm -f "$TMP" "${TMP}.r" "$REFERER_FILE" "$ORIGIN_FILE"
 
 echo "== 6. test + reload =="
 sudo nginx -t

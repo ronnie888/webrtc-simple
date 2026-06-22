@@ -34,6 +34,15 @@ http {
 __PARTNERS_REFERER__
     }
 
+    # WebSocket UPGRADE requests carry an Origin header (the iframe parent), NOT
+    # a Referer — so the referer map above 403s real iframe WS handshakes. This
+    # parallel map gates /ws on Origin so partner iframes connect even without a
+    # token. Same partner list, matched against $http_origin.
+    map $http_origin $origin_ok {
+        default                 0;
+__PARTNERS_ORIGIN__
+    }
+
     # ---- HTTP :80 → redirect to HTTPS (keep acme challenge for renew) ----
     server {
         listen 80;
@@ -76,12 +85,15 @@ __PARTNERS_REFERER__
             try_files $uri $uri/ =404;
         }
 
-        # WebSocket signaling (WSS) → Node :3000. Allowed when EITHER a partner
-        # referer (plain viewer) OR an ?lt= token is present (embed). The Node
-        # signaling server validates the token; bad tokens are rejected there.
+        # WebSocket signaling (WSS) → Node :3000. Allowed when ANY of: partner
+        # Referer (plain viewer), partner Origin (real iframe WS handshake — the
+        # common case, WS carries Origin not Referer), OR an ?lt= token (embed).
+        # Node validates the token; bad tokens are rejected there.
         location /ws {
-            if ($embed_ok = 0) { set $ws_block 1; }
-            if ($arg_lt != "") { set $ws_block 0; }
+            set $ws_block 1;
+            if ($embed_ok = 1)   { set $ws_block 0; }
+            if ($origin_ok = 1)  { set $ws_block 0; }
+            if ($arg_lt != "")   { set $ws_block 0; }
             if ($ws_block = 1) { return 403; }
             proxy_pass http://127.0.0.1:3000;
             proxy_http_version 1.1;
