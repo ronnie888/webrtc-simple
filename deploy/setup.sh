@@ -6,20 +6,25 @@ set -euo pipefail
 PUBLIC_IP="${PUBLIC_IP:?set PUBLIC_IP to the VPS public IP}"
 TURN_USER="${TURN_USER:-webrtc}"
 TURN_PASS="${TURN_PASS:-changeme}"
+KURENTO_INSTANCES="${KURENTO_INSTANCES:-4}"   # N Kurento on ports 8888..8888+N-1
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "== 1. system packages =="
 sudo apt-get update
 sudo apt-get install -y nginx libnginx-mod-rtmp coturn nodejs npm curl
 
-echo "== 2. docker + kurento =="
+echo "== 2. docker + kurento (N instances) =="
 if ! command -v docker >/dev/null; then curl -fsSL https://get.docker.com | sudo sh; fi
+# Remove any legacy single-instance container, then launch N instances on
+# ports 8888..8888+N-1 (each Kurento serializes connect setup; N = N× parallel).
 sudo docker rm -f kurento-media-server 2>/dev/null || true
-sudo docker run -d --name kurento-media-server --network host --restart always \
-  --ulimit nofile=65536:65536 --log-opt max-size=50m --log-opt max-file=5 \
-  -e KMS_STUN_IP=stun.l.google.com -e KMS_STUN_PORT=19302 \
-  -e KMS_EXTERNAL_IP="${PUBLIC_IP}" \
-  kurento/kurento-media-server:7.0
+KURENTO_URIS=""
+for i in $(seq 0 $((KURENTO_INSTANCES - 1))); do
+  bash "$REPO_DIR/deploy/launch-kurento.sh" "$i" "$PUBLIC_IP"
+  KURENTO_URIS="${KURENTO_URIS}ws://localhost:$((8888 + i))/kurento,"
+done
+KURENTO_URIS="${KURENTO_URIS%,}"   # strip trailing comma
+echo "KURENTO_URIS=${KURENTO_URIS}"
 echo "== 2b. firewall (host iptables) =="
 # Open every port the stack needs. NOTE: on OCI/cloud VPSes you must ALSO add
 # matching ingress rules in the cloud Security List / NSG (web console) — host
@@ -82,6 +87,7 @@ Environment=TURN_URL=turn:${PUBLIC_IP}:3478
 Environment=TURN_USER=${TURN_USER}
 Environment=TURN_PASS=${TURN_PASS}
 Environment=EMBED_TOKENS=${EMBED_TOKENS:-}
+Environment=KURENTO_URIS=${KURENTO_URIS}
 EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now webrtc-simple
