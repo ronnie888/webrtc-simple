@@ -1,6 +1,7 @@
 # HTTPS + iframe-embed whitelist config for webrtc-simple.
-# setup-ssl.sh substitutes __DOMAIN__, __PARTNERS_REFERER__, __PARTNERS_CSP__
-# and writes the result to /etc/nginx/nginx.conf, then reloads.
+# setup-ssl.sh substitutes the DOMAIN / PARTNERS placeholders below and writes
+# the result to /etc/nginx/nginx.conf, then reloads. (Placeholder tokens are
+# intentionally NOT named in this comment so the substitution can't match here.)
 #
 # Loads the RTMP dynamic module; pinned to ONE worker so the published RTMP
 # stream is visible to /stat and Kurento's pull (streams are not shared across
