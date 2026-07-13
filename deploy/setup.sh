@@ -58,7 +58,7 @@ sudo cp -r "$REPO_DIR"/src "$REPO_DIR"/config.js "$REPO_DIR"/package.json /opt/w
 # runtime (pure JS), so skip lifecycle scripts.
 ( cd /opt/webrtc-simple && sudo npm install --omit=dev --ignore-scripts )
 sudo mkdir -p /var/www/webrtc-simple
-sudo cp "$REPO_DIR/public/viewer.html" /var/www/webrtc-simple/
+sudo cp "$REPO_DIR/public/viewer.html" "$REPO_DIR/public/embed.html" /var/www/webrtc-simple/
 
 echo "== 4. nginx (RTMP) =="
 sudo cp "$REPO_DIR/deploy/nginx-rtmp.conf" /etc/nginx/nginx.conf
