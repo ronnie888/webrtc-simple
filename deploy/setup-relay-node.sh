@@ -28,6 +28,10 @@ if f'pull rtmp://{origin}' in s:
 m = re.search(r'(application live \{\n(?:.*\n)*?)(\s*)(allow publish[^\n]*\n(\s*allow publish[^\n]*\n)*)?(\s*)(deny publish[^\n]*\n)?(\s*allow play all;)', s)
 assert m, 'could not find application live block'
 head = m.group(1)
+# A relay never accepts a local publish, so drop any on_publish line that came
+# from copying an origin's already-wired config — it would point at :3002 for a
+# stream this box never receives.
+head = re.sub(r'[ \t]*on_publish[^\n]*\n', '', head)
 pull = (f'            # RELAY node: no local OBS. Continuously pull the origin\'s\n'
         f'            # stream into local live/stream so this box\'s Kurento pulls\n'
         f'            # localhost, same as the origin. static = keep alive + reconnect.\n'
@@ -50,13 +54,13 @@ echo "nginx masters: $masters (must be 1)"
 echo "relay pull ESTAB to origin:"
 sudo ss -tnp 2>/dev/null | grep "${ORIGIN_IP}:1935" | head -1 || echo "  (not yet — origin may have no live source)"
 # Tell the admin collector this is a relay so it reports upstream-idle as
-# OFFLINE, not DEAD (a relay has no local OBS that could "die").
-if [ -f /etc/systemd/system/webrtc-swc-admin.service ]; then
-  sudo mkdir -p /etc/systemd/system/webrtc-swc-admin.service.d
-  printf '[Service]\nEnvironment=NODE_ROLE=relay\n' | sudo tee /etc/systemd/system/webrtc-swc-admin.service.d/role.conf >/dev/null
-  sudo systemctl daemon-reload
-  sudo systemctl restart webrtc-swc-admin 2>/dev/null || true
-fi
+# OFFLINE, not DEAD (a relay has no local OBS that could "die"). Written
+# UNCONDITIONALLY — the drop-in applies whenever the admin unit exists, even if
+# setup-admin.sh runs AFTER this script (order-independent).
+sudo mkdir -p /etc/systemd/system/webrtc-swc-admin.service.d
+printf '[Service]\nEnvironment=NODE_ROLE=relay\n' | sudo tee /etc/systemd/system/webrtc-swc-admin.service.d/role.conf >/dev/null
+sudo systemctl daemon-reload 2>/dev/null || true
+sudo systemctl restart webrtc-swc-admin 2>/dev/null || true
 
 echo "Done. When the origin's OBS is live, this node's /stat bw_video goes nonzero."
 echo "NOTE: if the pull connected while the origin had NO source, restart nginx"

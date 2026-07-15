@@ -21,6 +21,8 @@ set -uo pipefail
 KEY='D:\ppk\vprivateprod.ppk'
 N63='ubuntu@138.2.88.192'; HK63='SHA256:BVZ/iaGoIec8uHq96kt5ZlZhQJUKzUof9lqTXCMDM8o'; UNIT63='webrtc-swc'
 N64='ubuntu@134.185.89.40'; HK64='SHA256:DjYX3mamweedpgwiIcPtcWgi+gDdj0GwDi2KT7i/KPI'; UNIT64='webrtc-simple'
+# Admin creds for the final verify — NOT committed. Pass via env: ADMIN_AUTH='admin:PASS'
+ADMIN_AUTH="${ADMIN_AUTH:?set ADMIN_AUTH='admin:<your admin pass>' for the fleet-health verify}"
 ORIGIN_IP='138.2.88.192'
 
 ssh63(){ plink -batch -hostkey "$HK63" -i "$KEY" "$N63" "$1"; }
@@ -68,7 +70,7 @@ done
 
 echo "############ VERIFY ############"
 echo "-- fleet health (via node-63 admin) --"
-ssh63 "curl -sk -u admin:f28mFXpNHM3dx8efPa https://localhost/admin/api/fleet | python3 -c 'import sys,json;d=json.load(sys.stdin);print(\"total viewers:\",d[\"totalViewers\"]);[print(\" \",n[\"name\"],n.get(\"role\"),n[\"source\"],\"bw=\"+str(n.get(\"bwVideo\")),n[\"status\"]) for n in d[\"nodes\"]]'"
+ssh63 "curl -sk -u $ADMIN_AUTH https://localhost/admin/api/fleet | python3 -c 'import sys,json;d=json.load(sys.stdin);print(\"total viewers:\",d[\"totalViewers\"]);[print(\" \",n[\"name\"],n.get(\"role\"),n[\"source\"],\"bw=\"+str(n.get(\"bwVideo\")),n[\"status\"]) for n in d[\"nodes\"]]'"
 echo
 echo "DONE. If a source shows OFFLINE/0, OBS has not reconnected — start it."
 echo "If node-64 bw stays 0 with node-63 LIVE, re-run: restart nginx on node-64"

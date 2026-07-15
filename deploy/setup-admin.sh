@@ -13,9 +13,13 @@ HTPASSWD=/etc/nginx/.htpasswd-admin
 WEBROOT=/var/www/webrtc-simple
 SRC=/opt/webrtc-simple/src
 
-# 1. collector + static page in place (assumes repo already rsync'd to /opt/webrtc-simple)
-sudo cp "$SRC/admin-collector.js" "$SRC/admin-collector.js" 2>/dev/null || true
-[ -f "$WEBROOT/admin.html" ] || { echo "admin.html missing in $WEBROOT — rsync public/ first"; exit 1; }
+# 1. Stage the collector + admin page FROM THE REPO CLONE into the running dirs.
+# (setup.sh copies these on a fresh box, but re-running this after a code update
+# must refresh them too — so copy from the repo, don't assume they're current.)
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+sudo mkdir -p "$SRC" "$WEBROOT"
+sudo cp "$REPO_DIR/src/admin-collector.js" "$SRC/admin-collector.js"
+sudo cp "$REPO_DIR/public/admin.html" "$WEBROOT/admin.html"
 
 # 2. docker group for the collector user
 sudo usermod -aG docker ubuntu || true
@@ -31,6 +35,8 @@ if [ -n "${FLEET_PEERS:-}" ]; then
   sudo mkdir -p /etc/systemd/system/webrtc-swc-admin.service.d
   printf '[Service]\nEnvironment=FLEET_PEERS=%s\nEnvironment=FLEET_AUTH=%s\n' \
     "$FLEET_PEERS" "${FLEET_AUTH:-}" | sudo tee /etc/systemd/system/webrtc-swc-admin.service.d/fleet.conf >/dev/null
+  # Holds the admin password in cleartext — must not be world-readable.
+  sudo chmod 600 /etc/systemd/system/webrtc-swc-admin.service.d/fleet.conf
 fi
 sudo systemctl daemon-reload
 sudo systemctl enable --now webrtc-swc-admin
@@ -39,7 +45,9 @@ systemctl is-active webrtc-swc-admin
 
 # 4. basic-auth file (apr1 via openssl; nginx-compatible, no apache2-utils needed).
 #    Perms: readable by the nginx worker user (nobody:nogroup).
-if [ ! -f "$HTPASSWD" ]; then
+# If a password arg is given, always (re)set it — even on a re-run. Otherwise
+# generate one only when no htpasswd exists yet (preserve it across re-runs).
+if [ -n "${1:-}" ] || [ ! -f "$HTPASSWD" ]; then
   PW="${1:-$(openssl rand -base64 15 | tr -d '/+=' | cut -c1-18)}"
   printf 'admin:%s\n' "$(openssl passwd -apr1 "$PW")" | sudo tee "$HTPASSWD" >/dev/null
   echo "ADMIN_PASSWORD=$PW   (user: admin)"

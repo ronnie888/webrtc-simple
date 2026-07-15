@@ -10,9 +10,18 @@
 #   bash ~/full-fleet-reboot.sh
 set -uo pipefail
 
-N64='ubuntu@134.185.89.40'
-SSH64="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new $N64"
-AUTH='admin:f28mFXpNHM3dx8efPa'
+# ── EDIT THESE for your fleet ────────────────────────────────────────────────
+RELAY='ubuntu@RELAY_IP'          # e.g. ubuntu@134.185.89.40
+ORIGIN_UNIT="${ORIGIN_UNIT:-webrtc-simple}"   # signaling unit on THIS (origin) box
+RELAY_UNIT="${RELAY_UNIT:-webrtc-simple}"     # signaling unit on the relay box
+#   NOTE: setup.sh always installs the signaling unit as `webrtc-simple`.
+#   Only node-63 was hand-renamed to `webrtc-swc` — set ORIGIN_UNIT=webrtc-swc
+#   ONLY if you are on that specific box.
+# AUTH is read from the admin unit's fleet.conf drop-in so no password is
+# committed here. Falls back to a placeholder you can override with AUTH=... env.
+AUTH="${AUTH:-admin:$(sudo grep -ohP 'FLEET_AUTH=admin:\K\S+' /etc/systemd/system/webrtc-swc-admin.service.d/fleet.conf 2>/dev/null)}"
+# ─────────────────────────────────────────────────────────────────────────────
+SSH64="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new $RELAY"
 
 # Reads bw_video either locally ($2="local") or on node-64 ($2="remote").
 # The whole pipeline is a single-quoted string so ssh passes it intact.
@@ -38,7 +47,7 @@ for t in $(seq 1 20); do
   echo "  healthy: $n/4"; [ "$n" = "4" ] && break; sleep 3
 done
 echo "== [node-63] restart signaling + collector =="
-sudo systemctl restart webrtc-swc
+sudo systemctl restart "$ORIGIN_UNIT"
 sudo systemctl restart webrtc-swc-admin
 echo "== [node-63] wait for source (OBS reconnect) =="
 wait_bw "node-63" local
@@ -49,7 +58,7 @@ $SSH64 'for i in 0 1 2 3; do sudo docker restart kurento-$i >/dev/null; done; ec
 echo "== [node-64] wait Kurento healthy =="
 $SSH64 'for t in $(seq 1 20); do n=$(sudo docker ps --filter health=healthy --format "{{.Names}}" | grep -c "^kurento-"); echo "  healthy: $n/4"; [ "$n" = "4" ] && break; sleep 3; done'
 echo "== [node-64] restart nginx (re-arm relay pull) + signaling + collector =="
-$SSH64 'sudo systemctl restart nginx; sleep 3; sudo systemctl restart webrtc-simple; sudo systemctl restart webrtc-swc-admin; echo -n "nginx masters: "; ps -C nginx -o cmd | grep -c master'
+$SSH64 "sudo systemctl restart nginx; sleep 3; sudo systemctl restart $RELAY_UNIT; sudo systemctl restart webrtc-swc-admin; echo -n 'nginx masters: '; ps -C nginx -o cmd | grep -c master"
 echo "== [node-64] wait for relay bytes =="
 wait_bw "node-64" remote
 

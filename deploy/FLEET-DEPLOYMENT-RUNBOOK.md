@@ -46,14 +46,31 @@ See the capacity estimate for tiers.
 | SSH key | `D:\ppk\vprivateprod.ppk` | same: `D:\ppk\vprivateprod.ppk` |
 | OBS source IP (publish-lock) | 103.60.170.61 | `______` |
 | TURN password | swc-turn-8x2k | pick one: `______` |
-| Admin basic-auth pass | f28mFXpNHM3dx8efPa | generated in §6 |
+| Admin basic-auth pass | `<generated in §6 — never commit>` | generated in §6 |
 | Partner embed domains | 37 partners | space-separated list |
 | Let's Encrypt email | — | `______` |
 
+> **⚠️ Signaling unit name.** On every box built by `setup.sh` (node-62, node-65, and any fresh
+> box) the signaling unit is **`webrtc-simple`**. `webrtc-swc` was a one-off hand-rename on node-63
+> ONLY. **All commands in this runbook use `webrtc-simple`.** When unsure on a box:
+> `systemctl list-units 'webrtc-s*' --type=service`. (The admin *collector* unit is
+> `webrtc-swc-admin` on every box — that name is correct everywhere, don't rename it.)
+
 > **node-62 is NOT a fresh box** — it already runs the base webrtc-simple stack (48-core, 4 Kurento,
-> signaling active, serves `mystreamingserver.live`). So on node-62 you **SKIP §2-3** (code + setup.sh
-> already done) and only add the NEW features: re-deploy the latest code (§2 rsync only), then
-> §6 admin, §7 fleet, §8 allowlist. **node-65 is fresh** → full §2-3 bootstrap.
+> signaling `webrtc-simple` active, serves `mystreamingserver.live`). On node-62 you SKIP the Docker/
+> Kurento/coturn install (§3), but you MUST still push the latest code AND copy it into the running
+> dirs, or the new admin/fleet/allowlist features never land. Exact node-62 upgrade path:
+> ```bash
+> # after §2 pushes the repo to ~/webrtc-swc on node-62:
+> sudo cp -r ~/webrtc-swc/src/* /opt/webrtc-simple/src/            # refresh the app code
+> sudo cp ~/webrtc-swc/public/admin.html /var/www/webrtc-simple/   # place the dashboard page
+> sudo systemctl restart webrtc-simple                             # node-62's signaling unit
+> ```
+> Then run §6 (admin) → §7 (fleet) → §8 (allowlist). **Back up node-62's live config first:**
+> `sudo cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak.preadmin` — setup-admin.sh edits the
+> production config that serves `mystreamingserver.live`; verify `grep -n 'location /stat'` shows the
+> `allow 127.0.0.1; deny all;` form and that `nginx -t` passes before any reload.
+> **node-65 is fresh** → full §2-3 bootstrap.
 > Decide first: keep `mystreamingserver.live` or use a new domain for the 62/65 fleet.
 
 **Both VPS must be:** Ubuntu 24.04, sudo-capable `ubuntu` user, reachable on SSH.
@@ -107,10 +124,18 @@ ps -C nginx -o cmd | grep -c master                               # exactly 1
 ```
 
 **Gotchas:**
+- `TURN_PASS` has **no default** (setup.sh requires it) — a missing password used to ship coturn
+  with `changeme` = open relay abuse. Verify: `sudo grep '^user=' /etc/turnserver.conf` must NOT show
+  `changeme`.
 - Fresh OCI = no Docker → setup.sh installs it (that's the slow part).
 - `worker_processes 1` in nginx-rtmp.conf is **required** — RTMP streams aren't shared across
   workers; `auto` on a 48-core box isolated the publish to 1/48 → `nclients=0`.
 - kurento-client postinstall aborts npm on some tarballs → setup.sh uses `npm i --ignore-scripts`.
+- setup.sh does `systemctl restart nginx` (not reload) — that's fine here: it's the initial install
+  and `worker_processes 1` makes the dup-master problem impossible. The "never restart" golden rule
+  (§11) applies only to later config edits on a LIVE box.
+- ⚠️ **Publishing is wide OPEN** (`allow publish all`) from this step until you wire on_publish (§8b).
+  Do not expose :1935 to the internet before then, OR seed the allowlist + wire on_publish first.
 
 ---
 
@@ -144,8 +169,12 @@ curl -sI https://yourdomain.com/ | head -1                                      
 curl -sk -o /dev/null -w '%{http_code}\n' https://localhost/embed                   # 200
 ```
 
-### 4c. Cert on the RELAY (node-65) — copy, don't re-issue
-The relay answers the SAME domain via round-robin, so it needs the same cert. Two options:
+### 4c. Cert on the RELAY (node-65)
+The relay answers the SAME domain via round-robin, so it needs a valid cert for it.
+
+> **Recommended: Option B (self-issue).** It gets its own auto-renewing cert and never moves a
+> private key between boxes. Option A (copy) is faster but the copied cert silently expires in ~90
+> days and involves shipping the TLS private key around — only use it if you'll track renewal.
 
 **Option A — copy from origin (fast):**
 ```bash
@@ -161,11 +190,21 @@ sudo mkdir -p /etc/letsencrypt/live/yourdomain.com /var/www/certbot
 sudo tar -xzf /tmp/cert.tgz -C /etc/letsencrypt/live/yourdomain.com
 sudo cp /tmp/nginx.conf /etc/nginx/nginx.conf     # then step 5 swaps its RTMP block to relay-pull
 ```
-> ⚠️ A copied cert goes stale in ~90 days (origin auto-renews, the copy doesn't). Either re-copy on
-> renewal, OR run `certbot certonly --webroot` on node-65 too (it answers the domain via RR).
+# SECURITY: the tarball contains the TLS PRIVATE KEY — shred the copies after placing it:
+sudo shred -u /tmp/cert.tgz          # on BOTH node-62 and node-65
+sudo chmod 600 /etc/letsencrypt/live/yourdomain.com/privkey.pem
+# also delete the Windows-side copy you pscp'd through.
+```
+> ⚠️ A copied cert goes stale in ~90 days (origin auto-renews, the copy doesn't). Monitor it:
+> `openssl x509 -enddate -noout -in /etc/letsencrypt/live/yourdomain.com/fullchain.pem`.
 
-**Option B — issue independently on node-65:** run the same setup-ssl.sh on node-65 (DNS RR lets it
-pass HTTP-01). Cleaner for renewal, slightly slower.
+**Option B — issue independently on node-65 (recommended):** run the same setup-ssl.sh on node-65
+(DNS RR lets HTTP-01 pass) — it gets its own auto-renew timer, no private-key handling:
+```bash
+# ON node-65:
+DOMAIN=yourdomain.com EMAIL=you@example.com \
+  PARTNERS="...same partner list as the origin..." bash deploy/setup-ssl.sh
+```
 
 ---
 
@@ -190,6 +229,11 @@ admin, and restarts nginx.
 ---
 
 ## 6. Admin dashboard on BOTH nodes
+
+> **Precondition: run `setup-ssl.sh` (§4b/§4c) FIRST.** `setup-admin.sh` inserts the `/admin` block
+> by anchoring on the HTTPS `/stat` block (`allow 127.0.0.1; deny all; rtmp_stat all;`), which only
+> exists after SSL. On a plain setup.sh box it aborts "anchor not found". Verify first:
+> `grep -n 'location /stat' /etc/nginx/nginx.conf` shows the `allow 127.0.0.1; deny all;` form.
 
 ```bash
 # ON each node:
@@ -239,6 +283,13 @@ sudo systemctl daemon-reload && sudo systemctl restart webrtc-swc-admin
 ```
 Verify: `curl -sk -u admin:<PASS> https://localhost/admin/api/fleet` → both node names.
 
+> **Secure the drop-in:** `fleet.conf` holds the admin password in cleartext — `sudo chmod 600
+> /etc/systemd/system/webrtc-swc-admin.service.d/fleet.conf` on both nodes (setup-admin.sh does this
+> when it writes it, but the manual printf above doesn't). Peer polling uses `rejectUnauthorized:false`
+> over the peer's public IP — only wire FLEET_PEERS when the two nodes share a **trusted network path**
+> (same VPC/region); across the open internet an on-path attacker can capture FLEET_AUTH. Prefer the
+> private `10.0.9.x` interface if the nodes are co-located.
+
 > **NODE_ROLE matters:** an origin reports `publishing+bw=0` as **DEAD** (local OBS crashed); a relay
 > reports it as **OFFLINE** (upstream just idle — no local OBS to die). Without `NODE_ROLE=relay`
 > the relay shows false DEAD/DEGRADED when OBS is off.
@@ -256,15 +307,20 @@ printf '[\n  "<OBS_IP>",\n  "<backup_IP>"\n]\n' | sudo tee /opt/webrtc-simple/pu
 sudo chown ubuntu /opt/webrtc-simple/publishers.json
 sudo systemctl restart webrtc-swc-admin
 ```
-Empty file / `[]` = OPEN (any IP can push). Non-empty = only listed IPs.
+⚠️ **FAIL-OPEN:** an empty **OR malformed** publishers.json = **ANY IP can publish** (stream
+hijack). A typo, a truncated write, or a bad chown silently reopens publishing with no error in
+`/admin`. After seeding, the negative test in §8b (8.8.8.8 → 403) is a **mandatory gate** before
+go-live. This gate is **ORIGIN-ONLY** — the relay's `deny publish all` means it never accepts a
+publish, so its publishers.json is only for fleet-view display / failover.
 
 ### 8b. Wire on_publish on the ORIGIN (node-62 — the box OBS hits)
 ```bash
-# ON node-62: swap the static allow-publish block for the on_publish gate
+# ON node-62: swap the allow-publish line for the on_publish gate.
 sudo cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak.onpublish
-# edit application live: replace `allow publish ...; deny publish all;` with:
+# In `application live`, the stock config has ONLY `allow publish all;` (there is NO
+# `deny publish all;` line). Replace that one line with:
 #     on_publish http://127.0.0.1:3002/publish/check;
-#     allow play all;
+# and KEEP `allow play all;`.
 sudo nginx -t && sudo systemctl reload nginx
 ```
 > ⚠️ The reload **drops the current publish** → OBS reconnects (a few seconds). Not zero-downtime —
@@ -290,13 +346,27 @@ Give the origin SSH access to the relay so one command reboots both:
 test -f ~/.ssh/id_ed25519 || ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -C 'origin-to-fleet'
 cat ~/.ssh/id_ed25519.pub    # copy this
 
-# ON node-65 (relay): authorize it
+# ON node-65 (relay): authorize it (create ~/.ssh first — a fresh box may lack it)
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
 echo '<paste origin pubkey>' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
 
-# back ON node-62: verify + deploy the reboot script
+# back ON node-62: verify
 ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new ubuntu@<node-65-IP> hostname   # should print node-65
-# copy deploy/full-fleet-reboot-onnode.sh to ~/full-fleet-reboot.sh, edit N64=ubuntu@<node-65-IP>
-# and the unit names / hostkey if needed, then:
+```
+Then copy `deploy/full-fleet-reboot-onnode.sh` to `~/full-fleet-reboot.sh` and edit the labelled
+block at the top:
+
+1. `RELAY='ubuntu@<node-65-IP>'`
+2. `ORIGIN_UNIT` / `RELAY_UNIT` — leave as `webrtc-simple` for a fresh 62/65 fleet (setup.sh
+   default). Only set to `webrtc-swc` if you are literally on node-63.
+3. `AUTH` — reads the admin password from the fleet.conf drop-in automatically; override with
+   `AUTH='admin:<pass>'` env only if that lookup fails.
+
+(No hostkey to edit — this script authenticates the relay via the origin's own SSH key + accept-new,
+set up above. The hostkey-pinned variant is `full-fleet-reboot-swc.sh`, which runs from Windows via
+plink instead.)
+
+```bash
 chmod +x ~/full-fleet-reboot.sh
 ```
 Run any time to free the Kurento RSS leak + rebuild pipelines:
@@ -318,6 +388,15 @@ Origin-first ordering (relay re-pulls from a healthy source). Drops stream ~15-3
    Chrome with `--host-resolver-rules="MAP yourdomain.com <NODE_IP>" --ignore-certificate-errors`
    and confirm video: `video.readyState===4`, `videoWidth>0`, `currentTime` advancing.
 6. **Viewer split:** load a few times; `/count` on each node shows viewers on both.
+7. **TURN actually works** (Chrome-desktop uses a DIRECT candidate and MASKS a broken relay — the
+   exact failure that black-screens Telegram/iOS/UDP-blocked mobile viewers). Force a relay-only
+   test: `turnutils_uclient -v -u webrtc -w <TURN_PASS> <NODE_IP>` must return a relay candidate; or
+   a Trickle-ICE test with `iceTransportPolicy:'relay'` must still play. **Desktop success does NOT
+   prove TURN.**
+8. **Load-test before the event** — point the repo's load harness (or a `/count` ramp) at each node's
+   OWN `/embed` and confirm it holds your target viewers. Per project experience: **≤30 tabs/box**,
+   stagger connects, use anti-occlusion Chrome flags; add more boxes, not more tabs. Going live having
+   proven exactly one browser is how you discover the ceiling during the event.
 
 ---
 
@@ -325,7 +404,8 @@ Origin-first ordering (relay re-pulls from a healthy source). Drops stream ~15-3
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Black video, `ws` stuck 101/Pending | Stale Kurento pipeline (`MEDIA_OBJECT_NOT_FOUND`) after an OBS drop | Restart signaling (`webrtc-swc`/`webrtc-simple`) → rebuilds pipelines. Or full-fleet-reboot. |
+| Black video, `ws` stuck 101/Pending | Stale Kurento pipeline (`MEDIA_OBJECT_NOT_FOUND`) after an OBS drop | Usually self-heals on the next viewer connect (addViewer detects + rebuilds). If it doesn't, restart signaling (`webrtc-simple`) → rebuilds pipelines. Or full-fleet-reboot. |
+| Admin shows source OFFLINE / bw=0 while OBS is live | collector fetches `/stat` over HTTPS; that node isn't on the SSL nginx.conf yet (`:80` only) | Run `setup-ssl.sh` first, or set `STAT_URL=http://127.0.0.1/stat` on a pre-SSL node |
 | Relay `/stat` bw_video=0 while origin LIVE | static pull armed before origin had a source | `sudo systemctl restart nginx` on the relay |
 | Admin `/admin` returns 500 | nginx worker (`nobody`) can't read htpasswd | `chown root:nogroup`, `chmod 640` the htpasswd |
 | Admin panel STALE, "fetch … credentials" error | you opened `https://user:pass@host/admin` | use the plain URL + the basic-auth prompt |
@@ -337,8 +417,11 @@ Origin-first ordering (relay re-pulls from a healthy source). Drops stream ~15-3
 | Everything looks broken after `setup-ssl.sh` re-run | regen WIPES hand edits (on_publish, /admin block, publish-lock) | re-run `setup-admin.sh` + re-apply on_publish + reseed publishers.json (backups: `nginx.conf.bak.*`) |
 
 **Golden rules:**
-- nginx **reload**, never **restart** for config — restart can spawn dup :1935 masters. Verify
-  `ps -C nginx | grep -c master == 1` after every reload.
+- Signaling unit is **`webrtc-simple`** on every setup.sh box (62/64/65). `webrtc-swc` exists only on
+  the hand-renamed node-63. Unsure? `systemctl list-units 'webrtc-s*' --type=service`.
+- Prefer nginx **reload** for config edits. **RESTART is required and safe** to (re)arm the relay
+  static pull (§5/§10.3) — `worker_processes 1` means no dup-:1935-master risk; that danger only
+  exists with `worker_processes auto`. Always verify `ps -C nginx | grep -c master == 1` after either.
 - After any `scp` of a script to a node: `sed -i 's/\r$//'` (strip CRLF) before running.
 - Trust the **`bw_video` on `/stat`** and the **`playing`/`/count`** number over your eyes — a
   `<video>` shows the last frame frozen after the connection dies.
@@ -357,7 +440,7 @@ Origin-first ordering (relay re-pulls from a healthy source). Drops stream ~15-3
 | nginx config | `/etc/nginx/nginx.conf` (backups `.bak.*`) |
 | Publisher allowlist | `/opt/webrtc-simple/publishers.json` |
 | htpasswd | `/etc/nginx/.htpasswd-admin` (root:nogroup 640) |
-| Signaling unit | `webrtc-swc` (renamed) or `webrtc-simple` (default) |
+| Signaling unit | **`webrtc-simple`** on this fleet (setup.sh default — never renames). `webrtc-swc` = legacy node-63-only hand-rename. |
 | Admin collector unit | `webrtc-swc-admin` (:3002) |
 | Ports | 1935 RTMP · 443 HTTPS · 80 HTTP/acme · 3478 TURN · 8888-8891 Kurento WS · 3000 signaling · 3001 /count · 3002 admin |
 | Kurento containers | `kurento-0..3` (`--network host`, WS 8888-8891) |
@@ -368,11 +451,44 @@ Origin-first ordering (relay re-pulls from a healthy source). Drops stream ~15-3
 ## 13. Quick sequence (copy-paste order)
 
 ```
-BOTH nodes:   push code (§2) → setup.sh (§3)
-DNS:          two A records → yourdomain.com (§4a)
-node-62:      setup-ssl.sh (§4b)  → setup-admin.sh (§6) → seed publishers.json (§8a) → wire on_publish (§8b)
-node-65:      copy cert (§4c) → setup-relay-node.sh (§5) → setup-admin.sh (§6) → seed publishers.json (§8a)
-BOTH:         FLEET_PEERS drop-in (§7)  [node-65 also NODE_ROLE=relay]
-node-62:      origin→relay SSH key + reboot script (§9)
-FINALLY:      OBS on → verify end-to-end (§10)
+node-65 fresh:  push code (§2) → setup.sh (§3, needs TURN_PASS)
+node-62 exists: push code (§2) → copy src→/opt + admin.html→webroot + restart webrtc-simple (see §1 note)
+DNS:            two A records → yourdomain.com (§4a), wait for both to resolve
+node-62:        setup-ssl.sh (§4b) → setup-admin.sh (§6) → seed+verify publishers.json (§8a) → wire on_publish (§8b)
+node-65:        setup-ssl.sh self-issue (§4c Option B) → setup-admin.sh (§6) → setup-relay-node.sh (§5) → seed publishers.json (§8a)
+BOTH:           FLEET_PEERS drop-in (§7)  [node-65 also gets NODE_ROLE=relay from setup-relay-node.sh]
+node-62:        origin→relay SSH key + reboot script (§9)
+FINALLY:        OBS on → verify end-to-end incl. TURN + load test (§10)
 ```
+> Relay order: **SSL (§4c) → admin (§6) → relay-convert (§5)**. setup-admin.sh anchors on the SSL
+> `/stat` block, so SSL must precede it. setup-relay-node.sh writes the `NODE_ROLE=relay` drop-in
+> unconditionally, so it's safe to run after admin.
+
+---
+
+## 14. Operate the event
+
+Building the fleet ≠ running the show. Before and during a live event:
+
+- **Backup the allowlist before any `setup-ssl.sh` re-run** — regen wipes hand edits:
+  `sudo cp /opt/webrtc-simple/publishers.json{,.bak}` then restore after.
+- **Monitor** — the dashboard is pull-only (someone must watch). For paging, cron a check that curls
+  the fleet API and alerts on trouble:
+  ```bash
+  # */1 * * * * — alert if any node not HEALTHY or no source live
+  curl -sk -u admin:$PASS https://localhost/admin/api/fleet \
+    | python3 -c 'import sys,json;d=json.load(sys.stdin);import sys;sys.exit(0 if d["anyLive"] and all(n.get("status")=="HEALTHY" for n in d["nodes"]) else 1)' \
+    || your-telegram-or-webhook-alert "FLEET DEGRADED"
+  ```
+- **Rollback a bad node** — remove that node's A record in the DNS panel; TTL 300 ≈ ~5 min drain.
+  Keep the good node's record. (This is why TTL is 300.)
+- **Dynamic OBS source IP** — the allowlist is per-IP. If the venue's OBS IP is DHCP/changes, its
+  reconnect silently 403s. Either add the current IP live from `/admin` at event start, or (behind a
+  trusted firewall) leave `publishers.json` = `[]` (open). Watch `/admin` for the source flipping
+  OFFLINE mid-event.
+- **How viewers get the stream** — partners embed `<iframe src="https://yourdomain.com/embed">` (real
+  iframe WS carries partner Origin → allowed). A shared-token gate is available via `?lt=TOKEN`
+  (`EMBED_TOKENS` env). Bare `/` is partner-**referer**-gated and 403s without it — always give
+  people `/embed`, never bare `/`.
+- **Free the RSS leak before the event** — `bash ~/full-fleet-reboot.sh` (§9). Only a Kurento
+  container restart frees it.

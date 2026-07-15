@@ -5,7 +5,7 @@ set -euo pipefail
 
 PUBLIC_IP="${PUBLIC_IP:?set PUBLIC_IP to the VPS public IP}"
 TURN_USER="${TURN_USER:-webrtc}"
-TURN_PASS="${TURN_PASS:-changeme}"
+TURN_PASS="${TURN_PASS:?set a strong TURN password (no default — an open TURN relay gets abused)}"
 KURENTO_INSTANCES="${KURENTO_INSTANCES:-4}"   # N Kurento on ports 8888..8888+N-1
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -58,7 +58,7 @@ sudo cp -r "$REPO_DIR"/src "$REPO_DIR"/config.js "$REPO_DIR"/package.json /opt/w
 # runtime (pure JS), so skip lifecycle scripts.
 ( cd /opt/webrtc-simple && sudo npm install --omit=dev --ignore-scripts )
 sudo mkdir -p /var/www/webrtc-simple
-sudo cp "$REPO_DIR/public/viewer.html" "$REPO_DIR/public/embed.html" /var/www/webrtc-simple/
+sudo cp "$REPO_DIR/public/viewer.html" "$REPO_DIR/public/embed.html" "$REPO_DIR/public/admin.html" /var/www/webrtc-simple/
 
 echo "== 4. nginx (RTMP) =="
 sudo cp "$REPO_DIR/deploy/nginx-rtmp.conf" /etc/nginx/nginx.conf
