@@ -56,10 +56,16 @@ test('deriveHealth: live source -> LIVE', () => {
   assert.strictEqual(h.viewers, 8);
 });
 
-test('deriveHealth: publishing but bw_video 0 -> DEAD + DEGRADED', () => {
-  const h = deriveHealth({ stat: parseStat(STAT_DEAD), count: { viewers: 0 }, kurento: K_HEALTHY, host: HOST });
+test('deriveHealth: origin publishing but bw_video 0 -> DEAD + DEGRADED', () => {
+  const h = deriveHealth({ stat: parseStat(STAT_DEAD), count: { viewers: 0 }, kurento: K_HEALTHY, host: HOST, role: 'origin' });
   assert.strictEqual(h.source, 'DEAD');
   assert.strictEqual(h.status, 'DEGRADED');
+});
+
+test('deriveHealth: RELAY with stale publishing+bw0 -> OFFLINE not DEAD (no local OBS to die)', () => {
+  const h = deriveHealth({ stat: parseStat(STAT_DEAD), count: { viewers: 0 }, kurento: K_HEALTHY, host: HOST, role: 'relay' });
+  assert.strictEqual(h.source, 'OFFLINE');
+  assert.strictEqual(h.status, 'HEALTHY');
 });
 
 test('deriveHealth: near peak flags at >=70% ceiling', () => {

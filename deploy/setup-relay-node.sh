@@ -49,6 +49,15 @@ masters=$(ps -C nginx -o cmd | grep -c master || true)
 echo "nginx masters: $masters (must be 1)"
 echo "relay pull ESTAB to origin:"
 sudo ss -tnp 2>/dev/null | grep "${ORIGIN_IP}:1935" | head -1 || echo "  (not yet — origin may have no live source)"
+# Tell the admin collector this is a relay so it reports upstream-idle as
+# OFFLINE, not DEAD (a relay has no local OBS that could "die").
+if [ -f /etc/systemd/system/webrtc-swc-admin.service ]; then
+  sudo mkdir -p /etc/systemd/system/webrtc-swc-admin.service.d
+  printf '[Service]\nEnvironment=NODE_ROLE=relay\n' | sudo tee /etc/systemd/system/webrtc-swc-admin.service.d/role.conf >/dev/null
+  sudo systemctl daemon-reload
+  sudo systemctl restart webrtc-swc-admin 2>/dev/null || true
+fi
+
 echo "Done. When the origin's OBS is live, this node's /stat bw_video goes nonzero."
 echo "NOTE: if the pull connected while the origin had NO source, restart nginx"
 echo "      again once the origin is live to re-arm the pull."

@@ -36,6 +36,7 @@
   .nodehead{display:flex;align-items:center;gap:14px;padding:14px 20px 0}
   .nodename{font-size:15px;font-weight:700}
   .selftag{font-size:10px;background:var(--blue);color:#0d1117;padding:1px 6px;border-radius:4px;vertical-align:middle}
+  .roletag{font-size:10px;background:var(--panel2);color:var(--muted);padding:1px 6px;border-radius:4px;vertical-align:middle;text-transform:uppercase}
   .tile{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px 16px}
   .tile.wide{grid-column:span 2}
   .tile .label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px}
@@ -165,7 +166,7 @@ function renderFleet(f){
     const sec = document.createElement('section'); sec.className='nodesec';
     const badge = n.status||'STALE';
     sec.insertAdjacentHTML('beforeend', `<div class="nodehead">
-      <span class="nodename">${n.name||n.host?.hostname||'node'}${n.self?' <span class="selftag">this</span>':''}</span>
+      <span class="nodename">${n.name||n.host?.hostname||'node'}${n.role?` <span class="roletag">${n.role}</span>`:''}${n.self?' <span class="selftag">this</span>':''}</span>
       <span class="status ${badge}">${badge}</span>
       ${n.error?`<span class="refresh">${n.error}</span>`:`<span class="refresh">${n.source} · ${n.viewers||0} viewers</span>`}</div>`);
     const g = document.createElement('main'); g.className='nodegrid'; sec.appendChild(g);

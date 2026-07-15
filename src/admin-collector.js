@@ -22,6 +22,10 @@ const STAT_URL = process.env.STAT_URL || 'https://127.0.0.1/stat';
 // WM-armed CPU ceiling per node (project memory: 7/container x 12... but this
 // stack runs 4 Kurento; ceiling is a display heuristic, tune via env).
 const NODE_CEILING = parseInt(process.env.NODE_CEILING || '84', 10);
+// 'origin' = OBS pushes here (publishing+bw=0 means OBS crashed → DEAD).
+// 'relay'  = pulls from an origin (publishing+bw=0 just means upstream idle,
+//            NOT a dead local OBS → OFFLINE, never DEAD).
+const NODE_ROLE = process.env.NODE_ROLE || 'origin';
 
 // Fleet peers: other nodes' admin APIs, polled server-side so the browser sees
 // the whole fleet from one /admin (avoids per-node cert/CORS — the shared cert
@@ -59,13 +63,14 @@ function parseDockerStats(out) {
 }
 
 // Roll everything into the health verdict + capacity the dashboard renders.
-function deriveHealth({ stat, count, kurento, host }) {
+function deriveHealth({ stat, count, kurento, host, role = NODE_ROLE }) {
   const viewers = count && typeof count.viewers === 'number' ? count.viewers : 0;
   const publishing = stat.publishers > 0;
-  // Dead-OBS: nginx says publishing but no video bytes flowing (project memory:
-  // check bw_video FIRST for black video).
-  const sourceDead = publishing && stat.bwVideo === 0;
   const sourceLive = publishing && stat.bwVideo > 0;
+  // DEAD = publishing but zero video (black screen). Only meaningful on an
+  // ORIGIN (local OBS crashed). On a RELAY there is no local OBS to die — a
+  // stale <publishing/> with bw=0 just means the upstream is idle → OFFLINE.
+  const sourceDead = role === 'origin' && publishing && stat.bwVideo === 0;
   const kurentoUnhealthy = kurento.filter((k) => k.unhealthy).length;
   const loadPct = host.cores ? (host.load1 / host.cores) * 100 : 0;
   const memPct = host.memTotal ? (host.memUsed / host.memTotal) * 100 : 0;
@@ -78,6 +83,7 @@ function deriveHealth({ stat, count, kurento, host }) {
 
   return {
     status,
+    role,
     source: sourceDead ? 'DEAD' : sourceLive ? 'LIVE' : 'OFFLINE',
     viewers,
     perInstance: (count && count.perInstance) || [],
