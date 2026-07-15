@@ -69,6 +69,37 @@ bash deploy/setup-admin.sh [ADMIN_PASSWORD]   # idempotent; prints a random pass
 > admin.peryago blocks). Backup of the pre-`/admin` config is
 > `nginx.conf.bak.admindash`.
 
+## Scale out (multiple nodes, DNS round-robin)
+
+One box has a soft ceiling (~84 viewers with watermark armed; far more passthrough).
+To add capacity, add **relay nodes** that pull the source from the origin (the box
+OBS pushes to) and serve their own Kurento/WebRTC. Viewers split across all nodes
+via DNS round-robin.
+
+Per relay node:
+```bash
+# 1. same bootstrap as the origin
+PUBLIC_IP=<relay-ip> TURN_PASS=<same-as-origin> bash deploy/setup.sh
+# 2. copy the origin's cert (same domain) + its whitelisted nginx.conf, then:
+ORIGIN_IP=<origin-ip> bash deploy/setup-relay-node.sh   # swaps OBS-lock -> static pull
+bash deploy/setup-admin.sh                              # optional per-node dashboard
+# 3. add the relay's IP as an extra A record on the domain (TTL 300)
+```
+
+Notes / gotchas:
+- **nginx-RTMP `static pull` inits at master START, not on reload** — after the
+  origin's source goes live, `systemctl restart nginx` on the relay to (re)arm the
+  pull if it connected while the origin was idle. `bw_video` on the relay's `/stat`
+  confirms bytes.
+- Cert is shared across nodes (same domain via round-robin). The origin auto-renews;
+  a copied cert on a relay goes stale in ~90d — either run certbot on the relay too
+  (it answers the domain via RR) or add a renew-hook that rsyncs the cert.
+- DNS round-robin is crude (~even split, no health-check). If a relay dies, RR still
+  hands out its IP → those viewers fail (visible on the dashboard). Fine for a few
+  nodes; add an LB (least_conn) at 4+.
+- Relay depends on the origin's RTMP: origin down = all down (the origin is the OBS
+  ingest anyway).
+
 ## Watch
 
 Open `http://<vps-public-ip>/` (or `https://<domain>/` after setup-ssl.sh) in
