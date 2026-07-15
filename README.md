@@ -52,6 +52,23 @@ loads inside an `<iframe>` on a whitelisted partner domain (referer gate + CSP
 partner later by re-running with the new `PARTNERS` list. WSS is automatic on
 HTTPS (viewer.html picks `wss://`).
 
+## Admin dashboard (optional)
+
+Single-node health panel at `https://<domain>/admin` (basic-auth): source
+LIVE/OFFLINE, live viewers, per-Kurento spread, 4× Kurento CPU/mem/health, host
+load/mem, and a capacity-vs-peak tile. A small collector (`src/admin-collector.js`,
+systemd unit `webrtc-swc-admin`, localhost:3002) aggregates the localhost-only
+`/stat` + `/count` + `docker stats`; nginx proxies it under `/admin/api/`.
+
+```bash
+bash deploy/setup-admin.sh [ADMIN_PASSWORD]   # idempotent; prints a random pass if none given
+```
+
+> ⚠️ `setup-ssl.sh` regenerates `nginx.conf` and wipes hand edits — re-run
+> `setup-admin.sh` after it (same re-apply class as the publish-lock /
+> admin.peryago blocks). Backup of the pre-`/admin` config is
+> `nginx.conf.bak.admindash`.
+
 ## Watch
 
 Open `http://<vps-public-ip>/` (or `https://<domain>/` after setup-ssl.sh) in

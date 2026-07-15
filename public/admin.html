@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>node-63 · webrtc-swc admin</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#30363d;
+    --fg:#e6edf3; --muted:#8b949e;
+    --green:#3fb950; --amber:#d29922; --red:#f85149; --blue:#58a6ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+         padding:14px 20px;border-bottom:1px solid var(--border);background:var(--panel)}
+  header h1{font-size:15px;margin:0;font-weight:600}
+  header .host{color:var(--muted);font-size:12px}
+  .status{margin-left:auto;padding:6px 16px;border-radius:6px;font-weight:700;letter-spacing:.5px}
+  .status.HEALTHY{background:rgba(63,185,80,.15);color:var(--green);border:1px solid var(--green)}
+  .status.DEGRADED{background:rgba(210,153,34,.15);color:var(--amber);border:1px solid var(--amber)}
+  .status.DOWN{background:rgba(248,81,73,.15);color:var(--red);border:1px solid var(--red)}
+  .status.STALE{background:rgba(139,148,158,.15);color:var(--muted);border:1px solid var(--muted)}
+  .refresh{color:var(--muted);font-size:12px}
+  main{padding:20px;display:grid;gap:14px;
+       grid-template-columns:repeat(auto-fill,minmax(220px,1fr));max-width:1400px}
+  .tile{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px 16px}
+  .tile.wide{grid-column:span 2}
+  .tile .label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px}
+  .tile .val{font-size:26px;font-weight:700}
+  .tile .sub{color:var(--muted);font-size:12px;margin-top:4px}
+  .val.green{color:var(--green)} .val.amber{color:var(--amber)} .val.red{color:var(--red)} .val.blue{color:var(--blue)}
+  .bar{height:8px;background:var(--panel2);border-radius:4px;overflow:hidden;margin-top:8px}
+  .bar>span{display:block;height:100%}
+  .bar.green>span{background:var(--green)} .bar.amber>span{background:var(--amber)} .bar.red>span{background:var(--red)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+  .dot.ok{background:var(--green)} .dot.bad{background:var(--red)}
+  .spread{display:flex;gap:6px;align-items:flex-end;height:60px;margin-top:8px}
+  .spread .col{flex:1;background:var(--blue);border-radius:3px 3px 0 0;min-height:3px;
+               display:flex;align-items:flex-start;justify-content:center;color:#0d1117;font-size:11px;font-weight:700;padding-top:2px}
+  .err{color:var(--red);padding:20px}
+</style>
+</head>
+<body>
+<header>
+  <h1>node-63 · webrtc-swc</h1>
+  <span class="host" id="host">sabongflix.com</span>
+  <span class="status STALE" id="status">…</span>
+  <span class="refresh" id="refresh">connecting…</span>
+</header>
+<main id="grid"></main>
+
+<script>
+const CEIL_DEFAULT = 84;
+const $ = (id) => document.getElementById(id);
+
+function fmtBytes(b){ if(!b) return '0'; const u=['B','KB','MB','GB','TB']; let i=0,n=b; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(1)+u[i]; }
+function fmtDur(s){ const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60); return (d?d+'d ':'')+h+'h '+m+'m'; }
+function cls(pct,warn,crit){ return pct>=crit?'red':pct>=warn?'amber':'green'; }
+
+function tile(label,val,valCls,sub,extra){
+  return `<div class="tile"><div class="label">${label}</div>
+    <div class="val ${valCls||''}">${val}</div>
+    ${sub?`<div class="sub">${sub}</div>`:''}${extra||''}</div>`;
+}
+
+function render(d){
+  $('status').className = 'status '+d.status;
+  $('status').textContent = d.status;
+  $('host').textContent = (d.host&&d.host.hostname||'')+' · '+(d.host&&d.host.cores||'?')+' cores';
+
+  const ceil = d.capacity ? d.capacity.ceiling : CEIL_DEFAULT;
+  const srcCls = d.source==='LIVE'?'green':d.source==='DEAD'?'red':'muted';
+  const grid = $('grid'); grid.innerHTML='';
+
+  // Source
+  grid.insertAdjacentHTML('beforeend', tile('Source', d.source,
+    d.source==='LIVE'?'green':d.source==='DEAD'?'red':'',
+    d.source==='DEAD'?'publishing but 0 video — check OBS!':d.source==='OFFLINE'?'no publisher':'nclients pull: '+d.nclients));
+
+  // bw_video
+  grid.insertAdjacentHTML('beforeend', tile('Source video bw', (d.bwVideo||0)+' <span style="font-size:13px">kbps</span>',
+    d.source==='DEAD'?'red':d.bwVideo>0?'green':'', 'rtmp uptime '+fmtDur(d.rtmpUptime||0)));
+
+  // Viewers
+  grid.insertAdjacentHTML('beforeend', tile('Live viewers', d.viewers, 'blue', 'across '+(d.perInstance.length||0)+' kurento'));
+
+  // Capacity / peak
+  const cp = d.capacity||{pct:0,nearPeak:false};
+  const capCls = cls(cp.pct,70,90);
+  grid.insertAdjacentHTML('beforeend', tile('Capacity vs peak',
+    cp.pct.toFixed(0)+'%', capCls,
+    d.viewers+' / ~'+ceil+(cp.nearPeak?' · NEAR PEAK':' headroom'),
+    `<div class="bar ${capCls}"><span style="width:${Math.min(cp.pct,100)}%"></span></div>`));
+
+  // Per-kurento spread
+  const spread = d.perInstance.length
+    ? `<div class="spread">${d.perInstance.map((n,i)=>{const mx=Math.max(1,...d.perInstance);return `<div class="col" style="height:${Math.max(6,n/mx*100)}%" title="kurento-${i}: ${n}">${n}</div>`}).join('')}</div>`
+    : '<div class="sub">no data</div>';
+  grid.insertAdjacentHTML('beforeend', `<div class="tile wide"><div class="label">Per-Kurento spread</div>${spread}</div>`);
+
+  // Host load
+  const lp = d.host.loadPct||0;
+  grid.insertAdjacentHTML('beforeend', tile('Host load (1m)', d.host.load1, cls(lp,70,90),
+    lp.toFixed(0)+'% of '+d.host.cores+' cores · '+d.host.load5+' / '+d.host.load15,
+    `<div class="bar ${cls(lp,70,90)}"><span style="width:${Math.min(lp,100)}%"></span></div>`));
+
+  // Host mem
+  const mp = d.host.memPct||0;
+  grid.insertAdjacentHTML('beforeend', tile('Host memory', mp.toFixed(0)+'%', cls(mp,80,90),
+    fmtBytes(d.host.memUsed)+' / '+fmtBytes(d.host.memTotal)+' · up '+fmtDur(d.host.uptime),
+    `<div class="bar ${cls(mp,80,90)}"><span style="width:${Math.min(mp,100)}%"></span></div>`));
+
+  // Kurento table
+  const rows = (d.kurento||[]).map(k=>`<tr>
+    <td><span class="dot ${k.unhealthy?'bad':'ok'}"></span>${k.name}</td>
+    <td>${k.cpu||'-'}</td><td>${(k.mem||'').split(' / ')[0]}</td>
+    <td style="color:var(--muted)">${k.status||''}</td></tr>`).join('');
+  grid.insertAdjacentHTML('beforeend', `<div class="tile wide" style="grid-column:span 2">
+    <div class="label">Kurento containers (${d.kurento.length}) ${d.kurentoUnhealthy?'· <span style="color:var(--red)">'+d.kurentoUnhealthy+' unhealthy</span>':''}</div>
+    <table><thead><tr><th>name</th><th>cpu</th><th>mem</th><th>status</th></tr></thead><tbody>${rows||'<tr><td colspan=4>none</td></tr>'}</tbody></table></div>`);
+}
+
+let failCount=0;
+async function poll(){
+  try{
+    const r = await fetch('api/stats',{cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+    if(d.error) throw new Error(d.error);
+    render(d);
+    failCount=0;
+    $('refresh').textContent = 'updated '+new Date().toLocaleTimeString();
+  }catch(e){
+    failCount++;
+    $('refresh').textContent = 'stale ('+failCount+') · '+e.message;
+    if(failCount>=3){ $('status').className='status STALE'; $('status').textContent='STALE'; }
+  }
+}
+poll();
+setInterval(poll, 3000);
+</script>
+</body>
+</html>

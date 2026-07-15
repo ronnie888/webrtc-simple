@@ -1,0 +1,16 @@
+[Unit]
+Description=webrtc-swc admin dashboard collector (node-63)
+After=network.target docker.service webrtc-swc.service
+
+[Service]
+Type=simple
+User=ubuntu
+SupplementaryGroups=docker
+WorkingDirectory=/opt/webrtc-simple
+ExecStart=/usr/bin/node /opt/webrtc-simple/src/admin-collector.js
+Restart=always
+RestartSec=3
+Environment=ADMIN_PORT=3002
+
+[Install]
+WantedBy=multi-user.target
