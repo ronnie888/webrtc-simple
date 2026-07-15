@@ -29,6 +29,7 @@
   /* fleet layout */
   .fleettotal{display:flex;gap:40px;flex-wrap:wrap;padding:16px 20px;margin:16px 20px 0;
               background:var(--panel);border:1px solid var(--border);border-radius:10px}
+  .fleettotal:empty{display:none}
   .fleettotal .big{font-size:34px;font-weight:800;color:var(--blue)}
   .fleettotal .big.green{color:var(--green)} .fleettotal .big.amber{color:var(--amber)} .fleettotal .big.red{color:var(--red)}
   .fleettotal .sub{color:var(--muted);font-size:12px}
@@ -74,6 +75,8 @@
   <span class="status STALE" id="status">…</span>
   <span class="refresh" id="refresh">connecting…</span>
 </header>
+<div class="fleettotal" id="fleettotal"></div>
+<div id="pubhost"></div>
 <div id="grid"></div>
 
 <script>
@@ -163,26 +166,28 @@ function renderFleet(f){
               : nodes.some(n=>n.status==='DEGRADED') ? 'DEGRADED' : 'HEALTHY';
   $('status').className='status '+worst; $('status').textContent=worst;
 
-  const root = $('grid'); root.innerHTML='';
-  // fleet total banner
+  // fleet total banner (rebuilt each poll)
   const capPct = f.ceiling ? Math.round(f.totalViewers/f.ceiling*100) : 0;
-  root.insertAdjacentHTML('beforeend', `<div class="fleettotal">
+  $('fleettotal').innerHTML = `
     <div><div class="label">Fleet live viewers</div><div class="big">${f.totalViewers}</div></div>
     <div><div class="label">Sources live</div><div class="big">${nodes.filter(n=>n.source==='LIVE').length}/${nodes.length}</div></div>
-    <div><div class="label">Fleet capacity</div><div class="big ${capPct>=90?'red':capPct>=70?'amber':'green'}">${capPct}%</div><div class="sub">${f.totalViewers} / ~${f.ceiling}</div></div>
-  </div>`);
-  // Publisher allowlist panel (IPs permitted to push OBS). Managed live via
-  // on_publish; empty = open. Rendered once, then refreshed by loadPublishers().
-  root.insertAdjacentHTML('beforeend', `<div class="pubpanel" id="pubpanel">
-    <div class="label">Publisher allowlist — IPs allowed to push OBS (fleet-wide) <span id="pubopen"></span></div>
-    <div id="publist" class="publist"><span class="sub">loading…</span></div>
-    <div class="pubadd">
-      <input id="pubip" placeholder="e.g. 180.190.169.107" spellcheck="false">
-      <button id="pubaddbtn">+ Add IP</button>
-      <span id="pubmsg" class="sub"></span>
-    </div>
-  </div>`);
-  wirePublishers();
+    <div><div class="label">Fleet capacity</div><div class="big ${capPct>=90?'red':capPct>=70?'amber':'green'}">${capPct}%</div><div class="sub">${f.totalViewers} / ~${f.ceiling}</div></div>`;
+
+  // Publisher panel is built ONCE (persistent) so polling doesn't wipe the
+  // input mid-type or re-fetch the list every 3s — it only changes on edit.
+  if (!$('pubpanel')){
+    $('pubhost').innerHTML = `<div class="pubpanel" id="pubpanel">
+      <div class="label">Publisher allowlist — IPs allowed to push OBS (fleet-wide) <span id="pubopen"></span></div>
+      <div id="publist" class="publist"><span class="sub">loading…</span></div>
+      <div class="pubadd">
+        <input id="pubip" placeholder="e.g. 180.190.169.107" spellcheck="false">
+        <button id="pubaddbtn">+ Add IP</button>
+        <span id="pubmsg" class="sub"></span>
+      </div></div>`;
+    wirePublishers();
+  }
+
+  const root = $('grid'); root.innerHTML='';   // only the per-node sections rebuild each poll
   // per-node section
   nodes.forEach(n=>{
     const sec = document.createElement('section'); sec.className='nodesec';
