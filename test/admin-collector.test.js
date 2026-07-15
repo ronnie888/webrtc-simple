@@ -1,6 +1,15 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { parseStat, parseDockerStats, deriveHealth } = require('../src/admin-collector');
+const { parseStat, parseDockerStats, deriveHealth, isPublisherAllowed } = require('../src/admin-collector');
+
+test('isPublisherAllowed: empty list = open (allow all)', () => {
+  assert.strictEqual(isPublisherAllowed('1.2.3.4', []), true);
+});
+test('isPublisherAllowed: non-empty list gates by membership', () => {
+  const list = ['180.190.169.107', '103.60.170.61'];
+  assert.strictEqual(isPublisherAllowed('180.190.169.107', list), true);
+  assert.strictEqual(isPublisherAllowed('8.8.8.8', list), false);
+});
 
 // Real /stat XML captured from node-63 with OBS OFF (no <stream>, nclients 0).
 const STAT_OFFLINE = `<?xml version="1.0" encoding="utf-8" ?>

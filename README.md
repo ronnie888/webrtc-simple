@@ -69,6 +69,16 @@ bash deploy/setup-admin.sh [ADMIN_PASSWORD]   # idempotent; prints a random pass
 > admin.peryago blocks). Backup of the pre-`/admin` config is
 > `nginx.conf.bak.admindash`.
 
+**Publisher allowlist (which OBS IPs may push):** the admin has a "Publisher
+allowlist" panel. IPs are stored in `/opt/webrtc-simple/publishers.json` and
+enforced by nginx-rtmp `on_publish http://127.0.0.1:3002/publish/check` — the
+collector 200/403s each publish attempt against the list. Empty list = OPEN
+(any IP). Edits apply instantly (no nginx reload) and **replicate across the
+fleet** (FLEET_PEERS), so it doesn't matter which node DNS round-robin sent you
+to. To enable on the origin: add `on_publish http://127.0.0.1:3002/publish/check;`
+to the `application live` block (replacing static `allow publish` lines) — note
+that reload drops the *current* publish, so OBS reconnects (a few seconds).
+
 ## Scale out (multiple nodes, DNS round-robin)
 
 One box has a soft ceiling (~84 viewers with watermark armed; far more passthrough).
