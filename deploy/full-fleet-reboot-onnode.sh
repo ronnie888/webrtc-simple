@@ -14,9 +14,12 @@ N64='ubuntu@134.185.89.40'
 SSH64="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new $N64"
 AUTH='admin:f28mFXpNHM3dx8efPa'
 
-wait_bw(){ # $1=label  $2=cmd-prefix ("" local, or ssh64)
+# Reads bw_video either locally ($2="local") or on node-64 ($2="remote").
+# The whole pipeline is a single-quoted string so ssh passes it intact.
+BW_CMD='curl -sk https://localhost/stat | grep -oE "<bw_video>[0-9]+" | grep -oE "[0-9]+" | head -1'
+wait_bw(){ # $1=label  $2=local|remote
   for t in $(seq 1 40); do
-    bw=$($2 bash -c "curl -sk https://localhost/stat | grep -oE '<bw_video>[0-9]+' | grep -oE '[0-9]+' | head -1")
+    if [ "$2" = "remote" ]; then bw=$($SSH64 "$BW_CMD"); else bw=$(eval "$BW_CMD"); fi
     echo "  $1 bw_video: ${bw:-0}"
     [ "${bw:-0}" -gt 0 ] 2>/dev/null && return 0
     sleep 3
@@ -38,7 +41,7 @@ echo "== [node-63] restart signaling + collector =="
 sudo systemctl restart webrtc-swc
 sudo systemctl restart webrtc-swc-admin
 echo "== [node-63] wait for source (OBS reconnect) =="
-wait_bw "node-63" ""
+wait_bw "node-63" local
 
 # ---- node-64 RELAY (over ssh) ----
 echo "== [node-64 RELAY] restart 4 Kurento (frees RSS) =="
@@ -48,7 +51,7 @@ $SSH64 'for t in $(seq 1 20); do n=$(sudo docker ps --filter health=healthy --fo
 echo "== [node-64] restart nginx (re-arm relay pull) + signaling + collector =="
 $SSH64 'sudo systemctl restart nginx; sleep 3; sudo systemctl restart webrtc-simple; sudo systemctl restart webrtc-swc-admin; echo -n "nginx masters: "; ps -C nginx -o cmd | grep -c master'
 echo "== [node-64] wait for relay bytes =="
-wait_bw "node-64" "$SSH64"
+wait_bw "node-64" remote
 
 # ---- verify ----
 echo "############ VERIFY ############"
