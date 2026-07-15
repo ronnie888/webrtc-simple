@@ -22,8 +22,19 @@ sudo usermod -aG docker ubuntu || true
 
 # 3. systemd unit
 sudo cp "$(dirname "$0")/webrtc-swc-admin.service" /etc/systemd/system/webrtc-swc-admin.service
+# Fleet view (optional): set FLEET_PEERS to the OTHER nodes' admin APIs so this
+# node's /admin shows the whole fleet. Symmetric — set it on every node with the
+# others as peers. FLEET_AUTH = the shared basic-auth creds to reach a peer.
+#   FLEET_PEERS="node-64=https://134.185.89.40/admin/api/stats" \
+#   FLEET_AUTH="admin:PASS" bash deploy/setup-admin.sh
+if [ -n "${FLEET_PEERS:-}" ]; then
+  sudo mkdir -p /etc/systemd/system/webrtc-swc-admin.service.d
+  printf '[Service]\nEnvironment=FLEET_PEERS=%s\nEnvironment=FLEET_AUTH=%s\n' \
+    "$FLEET_PEERS" "${FLEET_AUTH:-}" | sudo tee /etc/systemd/system/webrtc-swc-admin.service.d/fleet.conf >/dev/null
+fi
 sudo systemctl daemon-reload
 sudo systemctl enable --now webrtc-swc-admin
+sudo systemctl restart webrtc-swc-admin
 systemctl is-active webrtc-swc-admin
 
 # 4. basic-auth file (apr1 via openssl; nginx-compatible, no apache2-utils needed).

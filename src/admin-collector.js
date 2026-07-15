@@ -23,6 +23,16 @@ const STAT_URL = process.env.STAT_URL || 'https://127.0.0.1/stat';
 // stack runs 4 Kurento; ceiling is a display heuristic, tune via env).
 const NODE_CEILING = parseInt(process.env.NODE_CEILING || '84', 10);
 
+// Fleet peers: other nodes' admin APIs, polled server-side so the browser sees
+// the whole fleet from one /admin (avoids per-node cert/CORS — the shared cert
+// only covers the domain, not per-node names). Format: comma-list of
+// name=url pairs, e.g. "node-64=https://134.185.89.40/admin/api/stats".
+// Empty = single-node (no /api/fleet aggregation).
+const FLEET_PEERS = (process.env.FLEET_PEERS || '').split(',').map((p) => p.trim()).filter(Boolean)
+  .map((p) => { const i = p.indexOf('='); return { name: p.slice(0, i), url: p.slice(i + 1) }; });
+// Basic-auth creds to reach a peer's /admin/api (same creds across the fleet).
+const FLEET_AUTH = process.env.FLEET_AUTH || '';   // "user:pass"
+
 // ---- pure parsers / derivers (unit-tested) --------------------------------
 
 // Pull the <live> counters out of nginx-rtmp /stat XML. Returns publishers,
@@ -163,6 +173,15 @@ function start() {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: String(e && e.message || e) }));
       }
+    } else if (req.url === '/api/fleet' || req.url === '/api/fleet/') {
+      try {
+        const data = await collectFleet();
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(data));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: String(e && e.message || e) }));
+      }
     } else {
       res.writeHead(404); res.end();
     }
@@ -171,6 +190,39 @@ function start() {
   });
 }
 
-module.exports = { parseStat, parseDockerStats, deriveHealth, collect, start };
+// Fetch a peer node's already-aggregated stats (server-side, we control both
+// nodes so ignore the cert-name mismatch on the direct-IP URL). Returns the
+// peer's stats object tagged with its name, or an error stub if unreachable.
+function fetchPeer(peer) {
+  return new Promise((resolve) => {
+    let req;
+    const opts = { rejectUnauthorized: false, timeout: 3000 };
+    if (FLEET_AUTH) opts.headers = { Authorization: 'Basic ' + Buffer.from(FLEET_AUTH).toString('base64') };
+    req = https.get(peer.url, opts, (res) => {
+      let d = '';
+      res.on('data', (c) => (d += c));
+      res.on('end', () => {
+        try { resolve({ name: peer.name, ...JSON.parse(d) }); }
+        catch { resolve({ name: peer.name, status: 'STALE', error: 'bad response' }); }
+      });
+    });
+    req.on('error', () => resolve({ name: peer.name, status: 'STALE', error: 'unreachable' }));
+    req.setTimeout(3000, () => { req.destroy(); resolve({ name: peer.name, status: 'STALE', error: 'timeout' }); });
+  });
+}
+
+// Aggregate this node + all peers into one fleet payload the dashboard renders
+// as columns. Self is tagged with its own hostname; total sums live viewers.
+async function collectFleet() {
+  const self = await collect();
+  const selfNode = { name: self.host.hostname, ...self, self: true };
+  const peers = await Promise.all(FLEET_PEERS.map(fetchPeer));
+  const nodes = [selfNode, ...peers];
+  const totalViewers = nodes.reduce((n, x) => n + (x.viewers || 0), 0);
+  const anyLive = nodes.some((x) => x.source === 'LIVE');
+  return { nodes, totalViewers, anyLive, ceiling: NODE_CEILING * nodes.length };
+}
+
+module.exports = { parseStat, parseDockerStats, deriveHealth, collect, collectFleet, start };
 
 if (require.main === module) start();
