@@ -157,10 +157,29 @@
         video.volume = 1;                   // no-op on iOS (read-only), harmless
         // MUST be called synchronously inside the gesture handler — iOS only
         // honours the unmute if play() rides the same user gesture.
-        video.play().catch(() => {});
+        // If it is refused anyway, unmuting has ALREADY paused playback, so
+        // undo it: a frozen picture is far worse than a silent one. Video wins.
+        video.play().catch(() => {
+          video.muted = true;
+          video.play().catch(() => {});     // muted playback is always allowed
+          paintSound();
+        });
       }
       paintSound();
     };
+    // Safety net: the picture must never stay frozen. If anything pauses the
+    // element while a stream is attached (an unmute the browser refused, a
+    // backgrounded tab, a webview quirk), fall back to muted playback rather
+    // than leave the viewer staring at a still frame.
+    video.addEventListener('pause', () => {
+      if (!video.srcObject) return;
+      video.play().catch(() => {
+        video.muted = true;
+        paintSound();
+        video.play().catch(() => {});
+      });
+    });
+
     const onTap = (e) => applySound(!video.muted, e);
     soundBtn.addEventListener('click', onTap);
     // iOS in-app webviews can swallow the synthetic click, so listen for the
