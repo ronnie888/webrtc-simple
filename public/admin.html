@@ -128,14 +128,21 @@ function renderNode(d, grid){
     d.source==='DEAD'?'red':d.bwVideo>0?'green':'', 'rtmp uptime '+fmtDur(d.rtmpUptime||0)));
 
   // Viewers
-  grid.insertAdjacentHTML('beforeend', tile('Live viewers', d.viewers, 'blue', 'across '+(d.perInstance.length||0)+' kurento'));
+  // Connected != watching. With the source off, people leave the tab open and
+  // their endpoint stays alive with nothing to send — real connections, but not
+  // viewers of anything. Show both so the number cannot mislead.
+  const idle = d.idle != null ? d.idle : 0;
+  const playing = d.playing != null ? d.playing : d.viewers;
+  grid.insertAdjacentHTML('beforeend', tile('Live viewers', playing, 'blue',
+    idle > 0 ? idle + ' idle (no source) · ' + d.viewers + ' connected'
+             : 'across ' + (d.perInstance.length || 0) + ' kurento'));
 
   // Capacity / peak
   const cp = d.capacity||{pct:0,nearPeak:false};
   const capCls = cls(cp.pct,70,90);
   grid.insertAdjacentHTML('beforeend', tile('Capacity vs peak',
     cp.pct.toFixed(0)+'%', capCls,
-    d.viewers+' / ~'+ceil+(cp.nearPeak?' · NEAR PEAK':' headroom'),
+    playing+' / ~'+ceil+(cp.nearPeak?' · NEAR PEAK':' headroom'),
     `<div class="bar ${capCls}"><span style="width:${Math.min(cp.pct,100)}%"></span></div>`));
 
   // Per-kurento spread
@@ -188,11 +195,15 @@ function renderFleet(f){
   $('status').className='status '+worst; $('status').textContent=worst;
 
   // fleet total banner (rebuilt each poll)
-  const capPct = f.ceiling ? Math.round(f.totalViewers/f.ceiling*100) : 0;
+  // Capacity tracks what is actually being SERVED, not open sockets.
+  const fPlaying = f.totalPlaying != null ? f.totalPlaying : f.totalViewers;
+  const fIdle = f.totalIdle != null ? f.totalIdle : 0;
+  const capPct = f.ceiling ? Math.round(fPlaying/f.ceiling*100) : 0;
   $('fleettotal').innerHTML = `
-    <div><div class="label">Fleet live viewers</div><div class="big">${f.totalViewers}</div></div>
+    <div><div class="label">Fleet live viewers</div><div class="big">${fPlaying}</div>
+      ${fIdle > 0 ? `<div class="sub">${fIdle} idle · ${f.totalViewers} connected</div>` : ''}</div>
     <div><div class="label">Sources live</div><div class="big">${nodes.filter(n=>n.source==='LIVE').length}/${nodes.length}</div></div>
-    <div><div class="label">Fleet capacity</div><div class="big ${capPct>=90?'red':capPct>=70?'amber':'green'}">${capPct}%</div><div class="sub">${f.totalViewers} / ~${f.ceiling}</div></div>`;
+    <div><div class="label">Fleet capacity</div><div class="big ${capPct>=90?'red':capPct>=70?'amber':'green'}">${capPct}%</div><div class="sub">${fPlaying} / ~${f.ceiling}</div></div>`;
 
   // Publisher panel is built ONCE (persistent) so polling doesn't wipe the
   // input mid-type or re-fetch the list every 3s — it only changes on edit.

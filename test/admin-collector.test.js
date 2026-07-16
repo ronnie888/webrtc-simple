@@ -94,3 +94,50 @@ test('deriveHealth: no kurento containers -> DOWN', () => {
   const h = deriveHealth({ stat: parseStat(STAT_OFFLINE), count: { viewers: 0 }, kurento: [], host: HOST });
   assert.strictEqual(h.status, 'DOWN');
 });
+
+// ---- idle vs playing split -------------------------------------------------
+// Reported 2026-07-16: "I stopped the video in prod but the views still stay in
+// the dashboard." The count was honest (real WS connections — people leaving the
+// tab open), but reporting them as capacity made the gauge read ~70% full while
+// the fleet served NO video. The source is one shared stream, so if it is not
+// live nobody is playing — that makes the split exact.
+const IDLE_HOST = { cores: 48, load1: 1, memTotal: 100, memUsed: 10 };
+const IDLE_K = [{ name: "kurento-0", unhealthy: false }];
+
+test('deriveHealth: source OFFLINE -> viewers are IDLE, capacity 0', () => {
+  const d = deriveHealth({
+    stat: { bwVideo: 0, publishers: 0, nclients: 0, uptime: 1 },
+    count: { viewers: 940, perInstance: [940] },
+    kurento: IDLE_K, host: IDLE_HOST, role: 'origin',
+  });
+  assert.strictEqual(d.source, 'OFFLINE');
+  assert.strictEqual(d.viewers, 940, 'total stays honest');
+  assert.strictEqual(d.playing, 0, 'nobody can play with no source');
+  assert.strictEqual(d.idle, 940);
+  assert.strictEqual(d.capacity.pct, 0, 'gauge must not cry wolf on idle viewers');
+  assert.strictEqual(d.capacity.nearPeak, false);
+});
+
+test('deriveHealth: source LIVE -> viewers are PLAYING, capacity counts them', () => {
+  const d = deriveHealth({
+    stat: { bwVideo: 900000, publishers: 1, nclients: 2, uptime: 1 },
+    count: { viewers: 700, perInstance: [700] },
+    kurento: IDLE_K, host: IDLE_HOST, role: 'origin',
+  });
+  assert.strictEqual(d.source, 'LIVE');
+  assert.strictEqual(d.playing, 700);
+  assert.strictEqual(d.idle, 0);
+  assert.ok(d.capacity.pct > 0, 'playing viewers DO consume capacity');
+});
+
+test('deriveHealth: source DEAD (publishing but bw=0) -> idle, not playing', () => {
+  // The dead-OBS case: RTMP session open, zero video. Viewers see nothing.
+  const d = deriveHealth({
+    stat: { bwVideo: 0, publishers: 1, nclients: 1, uptime: 1 },
+    count: { viewers: 500, perInstance: [500] },
+    kurento: IDLE_K, host: IDLE_HOST, role: 'origin',
+  });
+  assert.strictEqual(d.source, 'DEAD');
+  assert.strictEqual(d.playing, 0, 'a dead source serves nobody');
+  assert.strictEqual(d.idle, 500);
+});

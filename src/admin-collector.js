@@ -98,7 +98,22 @@ function deriveHealth({ stat, count, kurento, host, role = NODE_ROLE }) {
   const kurentoUnhealthy = kurento.filter((k) => k.unhealthy).length;
   const loadPct = host.cores ? (host.load1 / host.cores) * 100 : 0;
   const memPct = host.memTotal ? (host.memUsed / host.memTotal) * 100 : 0;
-  const capacityPct = NODE_CEILING ? (viewers / NODE_CEILING) * 100 : 0;
+  // A connected viewer is not necessarily WATCHING anything: when the source is
+  // off (between events, dead OBS) people leave the tab open and their WebRTC
+  // endpoint stays alive with nothing to send. Those are real connections — the
+  // count is honest — but reporting them as "viewers" made the gauge read ~70%
+  // full while the fleet served no video at all.
+  //
+  // The source is a single shared stream, so if it is not LIVE nobody can be
+  // playing. That makes the split exact without any per-viewer tracking.
+  const sourceUp = sourceLive && !sourceDead;
+  const playing = sourceUp ? viewers : 0;
+  const idle = viewers - playing;
+
+  // Capacity reflects what is actually being SERVED. Idle viewers still cost
+  // (~7.8 cores for ~940 endpoints), but they are not consuming stream capacity
+  // and must not make the gauge cry wolf.
+  const capacityPct = NODE_CEILING ? (playing / NODE_CEILING) * 100 : 0;
 
   let status = 'HEALTHY';
   if (kurentoUnhealthy > 0 || sourceDead) status = 'DEGRADED';
@@ -109,7 +124,9 @@ function deriveHealth({ stat, count, kurento, host, role = NODE_ROLE }) {
     status,
     role,
     source: sourceDead ? 'DEAD' : sourceLive ? 'LIVE' : 'OFFLINE',
-    viewers,
+    viewers,        // connected (honest total — real WS/endpoints)
+    playing,        // connected AND the source is live = actually watching
+    idle,           // connected but nothing to watch (source off)
     perInstance: (count && count.perInstance) || [],
     bwVideo: stat.bwVideo,
     nclients: stat.nclients,
@@ -117,7 +134,9 @@ function deriveHealth({ stat, count, kurento, host, role = NODE_ROLE }) {
     kurento,
     kurentoUnhealthy,
     host: { ...host, loadPct: +loadPct.toFixed(1), memPct: +memPct.toFixed(1) },
-    capacity: { viewers, ceiling: NODE_CEILING, pct: +capacityPct.toFixed(1), nearPeak: capacityPct >= 70 },
+    // capacity.viewers stays = playing: the tile answers "how much of the stream
+    // capacity am I using", not "how many sockets are open".
+    capacity: { viewers: playing, ceiling: NODE_CEILING, pct: +capacityPct.toFixed(1), nearPeak: capacityPct >= 70 },
   };
 }
 
@@ -311,8 +330,13 @@ async function collectFleet() {
   const peers = await Promise.all(FLEET_PEERS.map(fetchPeer));
   const nodes = [selfNode, ...peers];
   const totalViewers = nodes.reduce((n, x) => n + (x.viewers || 0), 0);
+  // Fleet-wide split, same rule as per-node. `playing` may be absent on a peer
+  // running an older collector — fall back to its viewers so a mixed-version
+  // fleet still adds up instead of silently reporting 0.
+  const totalPlaying = nodes.reduce((n, x) => n + (x.playing != null ? x.playing : (x.viewers || 0)), 0);
+  const totalIdle = totalViewers - totalPlaying;
   const anyLive = nodes.some((x) => x.source === 'LIVE');
-  return { nodes, totalViewers, anyLive, ceiling: NODE_CEILING * nodes.length };
+  return { nodes, totalViewers, totalPlaying, totalIdle, anyLive, ceiling: NODE_CEILING * nodes.length };
 }
 
 module.exports = { parseStat, parseDockerStats, deriveHealth, collect, collectFleet, isPublisherAllowed, start };
