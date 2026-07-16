@@ -11,13 +11,20 @@
       /* no text selection / drag */
       -webkit-user-select: none; -moz-user-select: none; user-select: none;
     }
+    /* Containing block for the overlays. MUST be relative, not static:
+       `position:fixed` children resolve against the VISUAL VIEWPORT, which in an
+       iOS/Android in-app webview (or any short iframe) is NOT this iframe's box —
+       the centred pill then lands off-screen and mobile viewers never see it.
+       `absolute` + a positioned body anchors everything to the player itself. */
+    body { position: relative; }
     #remoteVideo {
+      display: block;                  /* kill the inline-baseline gap */
       width: 100%; height: 100%; object-fit: contain; background: #000;
       pointer-events: none;            /* swallow clicks: no native menu, no scrub */
       -webkit-user-select: none; user-select: none;
     }
     .loading-overlay {
-      position: fixed; inset: 0; background: #000;
+      position: absolute; inset: 0; background: #000;
       display: flex; align-items: center; justify-content: center;
       z-index: 100; transition: opacity 0.3s;
     }
@@ -30,7 +37,7 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     .error-overlay {
-      position: fixed; inset: 0; background: #000; color: #ffcf6b;
+      position: absolute; inset: 0; background: #000; color: #ffcf6b;
       display: none; align-items: center; justify-content: center;
       z-index: 200; font: 14px system-ui, sans-serif; text-align: center; padding: 24px;
     }
@@ -39,7 +46,7 @@
        pointer-events:none (no native menu/scrub), so this is how a viewer
        supplies the user-gesture browsers require to allow audio. */
     #soundBtn {
-      position: fixed; z-index: 150;
+      position: absolute; z-index: 150;   /* absolute, NOT fixed — see body note */
       display: none;                      /* shown once a track is playing */
       align-items: center; gap: 9px;
       border: 0; color: #fff; cursor: pointer;
@@ -64,6 +71,19 @@
     @keyframes pulse {
       0%,100% { box-shadow: 0 6px 24px rgba(0,0,0,0.45), 0 0 0 0 rgba(220,38,38,0.5); }
       50%     { box-shadow: 0 6px 24px rgba(0,0,0,0.45), 0 0 0 14px rgba(220,38,38,0); }
+    }
+    /* Mobile: bigger tap target (Apple/Google both want >=44px) and never let the
+       pill overflow a short in-app-webview player. */
+    @media (max-width: 700px), (max-height: 420px) {
+      #soundBtn.muted {
+        padding: 14px 22px; font-size: 16px;
+        max-width: 86%; white-space: nowrap;
+      }
+      #soundBtn:not(.muted) { padding: 11px 13px; opacity: 0.9; }  /* thumb-friendly */
+    }
+    /* Respect reduced-motion: keep the pill, drop the pulsing. */
+    @media (prefers-reduced-motion: reduce) {
+      #soundBtn.muted { animation: none; }
     }
     /* UNMUTED = small, out of the way, bottom-left toggle. */
     #soundBtn:not(.muted) {
@@ -120,17 +140,35 @@
       iconSound.style.display = video.muted ? 'none' : '';
       soundBtn.setAttribute('aria-label', video.muted ? 'Unmute' : 'Mute');
     };
-    soundBtn.addEventListener('click', () => {
+    const toggleSound = (e) => {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
       video.muted = !video.muted;
       if (!video.muted) { video.volume = 1; video.play().catch(() => {}); }
       paintSound();
-    });
+    };
+    soundBtn.addEventListener('click', toggleSound);
+    // iOS in-app webviews can swallow the synthetic click; touchend is the
+    // gesture they actually honour for unmuting. preventDefault above stops the
+    // follow-up click from toggling straight back.
+    soundBtn.addEventListener('touchend', toggleSound, { passive: false });
     // Some contexts (a partner page the user already clicked in) permit sound
     // right away — try it, and silently keep muted if the browser refuses.
     const tryAutoUnmute = () => {
       video.muted = false;
-      video.play().then(paintSound).catch(() => { video.muted = true; paintSound(); });
+      video.play().then(paintSound).catch(() => {
+        // Blocked (the normal case on mobile): fall back to a MUTED play, which
+        // every browser permits. Without this the element can sit at readyState 0
+        // with no picture at all — the `autoplay` attribute alone is not enough
+        // once a play() has been rejected.
+        video.muted = true;
+        video.play().catch(() => {});
+        paintSound();
+      });
     };
+    // Show as soon as the track lands. Do NOT gate this on readyState/loadeddata:
+    // where autoplay needs a gesture (mobile), a muted <video> holds readyState 0
+    // until something calls play(), so gating on it deadlocks — no picture means
+    // no pill, no pill means no tap, no tap means no play.
     const showSound = () => { soundBtn.classList.add('show'); paintSound(); };
 
     // Token from ?lt= forwarded to the WS connect; server enforces it at the handshake.
