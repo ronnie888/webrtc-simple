@@ -1,9 +1,12 @@
-# webrtc-swc Fleet Deployment Runbook
+# webrtc-simple Fleet Deployment Runbook
 
-**Replicate the node-63/64 fleet onto a new 2-node fleet (e.g. node-62 origin + node-65 relay).**
+**Build a 2-node fleet (origin + relay) on a new domain — the shape node-63/64 and node-62/65 run.**
 
-This is the complete A-to-Z. Everything that was hand-fixed live on node-63/64 is captured here
-as repeatable steps + the exact gotchas that bit us. Follow top to bottom.
+Complete A-to-Z. Everything hand-fixed live on 63/64 **and 62/65** is captured here as repeatable
+steps plus the exact gotchas that bit us. Follow top to bottom.
+
+> **Two fleets exist already** — see §0b for what they look like. **§15 is the distilled experience:
+> read it before you start**, not after something breaks.
 
 ---
 
@@ -29,8 +32,35 @@ as repeatable steps + the exact gotchas that bit us. Follow top to bottom.
 Per node: **48 vCPU / 31 GB**, 4 Kurento in **passthrough** (no transcode, no watermark),
 one Node signaling process, coturn, nginx-rtmp, admin collector.
 
-**Capacity** (measured, passthrough): ~0.15 core/viewer → plan **~900 viewers/node** (~1,800 for 2).
-See the capacity estimate for tiers.
+**Capacity** (measured on node-65, passthrough): **~0.038 core/viewer** → plan **~900 viewers/node**
+(~1,800 for a 2-node fleet). Setup RATE, not viewer count, is what spikes load. Details + how it was
+measured: §0b. Real event traffic has since confirmed it — 455 viewers/node ran at ~35% host load.
+
+---
+
+## 0b. Reference builds (what already exists)
+
+Two fleets run this stack. Copy their shape; don't re-derive it.
+
+| | **sabongflix.com** | **mystreamingserver.live** |
+|---|---|---|
+| Origin (OBS ingest) | node-63 · 138.2.88.192 | node-62 · 161.118.215.36 (priv 10.0.9.123) |
+| Relay | node-64 · 134.185.89.40 | node-65 · 161.118.240.86 (priv 10.0.9.150) |
+| Signaling unit | `webrtc-swc` (node-63 ONLY — hand-renamed) / `webrtc-simple` (node-64) | `webrtc-simple` (both) |
+| Relay cert | copy of origin's | copy of origin's + renew-hook (§4c) |
+| Built | 2026-07-13→15 | 2026-07-15 |
+
+Both: Ubuntu 24.04, 48 vCPU / 31 GB, 4 Kurento (passthrough), DNS round-robin on DigitalOcean
+(TTL 300), same 36-partner whitelist, admin dashboard + fleet view, publisher allowlist.
+
+**Measured capacity** (werift load-gen, passthrough, no client decode): **~0.038 core/viewer**.
+A 48-core node saturates around **400-440** with the load-gen CO-LOCATED (a conservative floor);
+budget **~900/node** realistically, i.e. **~1,800 for a 2-node fleet**. Steady-state serving is cheap —
+**connection setup rate** (DTLS bursts) is what spikes load, so gradual ramps hold far more than a
+fast one. For a true hard number, run the harness from an EXTERNAL box, never on the node under test.
+
+**These are LIVE PROD.** Never point a new fleet's config, `FLEET_PEERS`, or relay `ORIGIN_IP` at
+them — `grep` each generated file for their IPs before running it.
 
 ---
 
@@ -172,11 +202,27 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://localhost/embed               
 ### 4c. Cert on the RELAY (node-65)
 The relay answers the SAME domain via round-robin, so it needs a valid cert for it.
 
-> **Recommended: Option B (self-issue).** It gets its own auto-renewing cert and never moves a
-> private key between boxes. Option A (copy) is faster but the copied cert silently expires in ~90
-> days and involves shipping the TLS private key around — only use it if you'll track renewal.
+> **⚠️ USE OPTION A (copy) + the renew-hook. Option B does NOT work once DNS RR is live.**
+> This was learned the hard way on the 62/65 build (2026-07-15): `setup-ssl.sh` on the relay
+> FAILED with
+> ```
+> Detail: <ORIGIN_IP>: Invalid response from http://yourdomain.com/.well-known/acme-challenge/…: 404
+> ```
+> Round-robin resolved the domain to the **origin**, so Let's Encrypt fetched the challenge from the
+> WRONG box — the token only exists on the relay's webroot. HTTP-01 + round-robin is a coin flip and
+> the origin can never serve the relay's challenge.
+>
+> Your options, in order of preference:
+> 1. **Option A + renew-hook (below)** — copy the origin's cert, and have the origin PUSH each
+>    renewal to the relay. Solves the "copy goes stale" problem. This is what 62/65 runs.
+> 2. **DNS-01** — certbot proves via a TXT record instead of HTTP, so RR is irrelevant and the relay
+>    self-renews. Cleanest, but needs a DNS-provider API token + plugin
+>    (e.g. `certbot-dns-digitalocean`). Do this if you want zero private-key movement.
+> 3. **Option B (HTTP-01 self-issue)** — ONLY viable BEFORE you add the relay's A record (issue the
+>    cert while the domain still resolves to one box), or if you temporarily pull the origin's A
+>    record (disrupts live viewers — don't do this on a live origin).
 
-**Option A — copy from origin (fast):**
+**Option A — copy from origin (what 62/65 runs):**
 ```bash
 # ON node-62: tar the cert (deref symlinks with -h!)
 sudo tar -czhf /tmp/cert.tgz -C /etc/letsencrypt/live/yourdomain.com .
@@ -195,16 +241,41 @@ sudo shred -u /tmp/cert.tgz          # on BOTH node-62 and node-65
 sudo chmod 600 /etc/letsencrypt/live/yourdomain.com/privkey.pem
 # also delete the Windows-side copy you pscp'd through.
 ```
-> ⚠️ A copied cert goes stale in ~90 days (origin auto-renews, the copy doesn't). Monitor it:
+> ⚠️ A copied cert goes stale in ~90 days (the origin auto-renews, the copy does NOT). Fix that with
+> the renew-hook below — do not rely on remembering. Check any time with:
 > `openssl x509 -enddate -noout -in /etc/letsencrypt/live/yourdomain.com/fullchain.pem`.
 
-**Option B — issue independently on node-65 (recommended):** run the same setup-ssl.sh on node-65
-(DNS RR lets HTTP-01 pass) — it gets its own auto-renew timer, no private-key handling:
+**Then: make the copy self-maintaining (renew-hook on the ORIGIN).**
+The origin already auto-renews; this makes it push each fresh cert to the relay. Requires the
+origin→relay SSH key from §9 (set that up first, or re-run this after).
+
 ```bash
-# ON node-65:
-DOMAIN=yourdomain.com EMAIL=you@example.com \
-  PARTNERS="...same partner list as the origin..." bash deploy/setup-ssl.sh
+# ON node-62 (origin) — replaces the stock reload-only hook:
+sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh >/dev/null <<'HOOK'
+#!/bin/sh
+# Reload local nginx, then push the renewed cert to the relay, whose cert is a
+# COPY (DNS round-robin makes HTTP-01 self-issue impossible on the relay).
+systemctl reload nginx
+RELAY=10.0.9.150            # relay PRIVATE ip
+DOM=yourdomain.com
+# Root reads the privkey and tars; ubuntu (owns the fleet SSH key) transports.
+tar -czhf /tmp/cert-renew.tgz -C /etc/letsencrypt/live/$DOM . || exit 0
+chown ubuntu /tmp/cert-renew.tgz
+sudo -u ubuntu scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new /tmp/cert-renew.tgz ubuntu@$RELAY:/tmp/cert-renew.tgz && \
+sudo -u ubuntu ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new ubuntu@$RELAY \
+  "sudo tar -xzf /tmp/cert-renew.tgz -C /etc/letsencrypt/live/$DOM && sudo chmod 600 /etc/letsencrypt/live/$DOM/privkey.pem && sudo systemctl reload nginx && shred -u /tmp/cert-renew.tgz"
+shred -u /tmp/cert-renew.tgz 2>/dev/null
+HOOK
+sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+
+# TEST IT NOW (idempotent — just re-pushes the current cert):
+sudo /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh && echo 'hook OK'
+# then on the relay, confirm the date matches the origin's:
+# sudo openssl x509 -enddate -noout -in /etc/letsencrypt/live/yourdomain.com/fullchain.pem
 ```
+> Why the root/ubuntu split: the hook runs as **root** (certbot), but the fleet SSH key belongs to
+> **ubuntu**. Root must do the `tar` (only root can read `privkey.pem`), then hand the tarball to
+> ubuntu for transport. A hook that tries `sudo -u ubuntu tar …` silently produces nothing.
 
 ---
 
@@ -388,6 +459,22 @@ Origin-first ordering (relay re-pulls from a healthy source). Drops stream ~15-3
    Chrome with `--host-resolver-rules="MAP yourdomain.com <NODE_IP>" --ignore-certificate-errors`
    and confirm video: `video.readyState===4`, `videoWidth>0`, `currentTime` advancing.
 6. **Viewer split:** load a few times; `/count` on each node shows viewers on both.
+6b. **AUDIO** (this shipped broken once — always check it):
+   - Source carries audio: `sudo curl -sk https://localhost/stat | grep -oE '<audio>.*</audio>'`
+     → expect e.g. `<codec>AAC</codec><channels>2</channels>`, and `bw_audio` > 0.
+     If absent, it's **OBS-side** (mixer muted / no audio track on the encoder) — fix there first.
+   - Viewer actually gets sound: open `/embed`, confirm the centre **"Tap for sound"** pill, tap it,
+     and hear audio. Programmatic proof (paste in devtools):
+     ```js
+     const v=document.querySelector('video'), at=v.srcObject.getAudioTracks()[0];
+     const ctx=new AudioContext(); await ctx.resume();        // MUST resume, else false 0
+     const an=ctx.createAnalyser(); ctx.createMediaStreamSource(new MediaStream([at])).connect(an);
+     const b=new Uint8Array(an.frequencyBinCount); let peak=0;
+     setInterval(()=>{an.getByteFrequencyData(b);peak=Math.max(peak,...b);console.log('peak',peak)},300);
+     // peak > 0 = real sound on the track. 0 with a suspended ctx means nothing.
+     ```
+   - `Cache-Control: no-store` on `/embed`, else viewers keep an old player:
+     `curl -skI https://localhost/embed -H 'Referer: https://<partner>/' | grep -i cache-control`
 7. **TURN actually works** (Chrome-desktop uses a DIRECT candidate and MASKS a broken relay — the
    exact failure that black-screens Telegram/iOS/UDP-blocked mobile viewers). Force a relay-only
    test: `turnutils_uclient -v -u webrtc -w <TURN_PASS> <NODE_IP>` must return a relay candidate; or
@@ -404,6 +491,12 @@ Origin-first ordering (relay re-pulls from a healthy source). Drops stream ~15-3
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| **NO AUDIO** (video fine) | `embed.html` `<video>` is `muted` AND has `pointer-events:none`, so nothing can unmute it | Already fixed: `#soundBtn` (centre pill). If it regresses, check the served page has `soundBtn`. **Diagnose in this order:** `/stat` `<audio>` block + `bw_audio` (is OBS even sending?) → Kurento `SdpEndpoint.conf.json` (`numAudioMedias:1`, `opus/48000/2`) → client `muted`. Do NOT just delete `muted` — autoplay-with-sound is blocked, you'd lose video too. |
+| A code/page change "didn't deploy" — viewers still see the old player | `/embed` had **no `Cache-Control`** (only ETag/Last-Modified) → browsers cache the viewer client | `location = /embed` must send `Cache-Control: no-store, no-cache, must-revalidate`. Verify: `curl -skI https://localhost/embed -H 'Referer: https://<partner>/' \| grep -i cache-control`. Without it you will chase phantom bugs on a page the viewer never received. |
+| **nginx RELOAD on the ORIGIN kills the source** (`bw_video=0`, `nclients=0`) while OBS TCP is still ESTAB | nginx-rtmp does NOT migrate a publish to the new worker; OBS stays pinned to a `worker process is shutting down` | `sudo systemctl restart nginx` (safe: `worker_processes 1` = no dup-master). OBS reconnects in ~15-60s. **On an origin, prefer restart over reload, and batch config edits PRE-EVENT.** Check for the stranding: `ps -C nginx -o cmd \| grep -c 'shutting down'` must be 0. |
+| **OBS "Failed to connect / check your stream key"** with the allowlist on | The lock matches the **NAT exit IP**, not the LAN IP the operator sees | `journalctl -u webrtc-swc-admin \| grep on_publish` prints the REAL arriving IP (`… -> DENY`). Add THAT. Confirm from the OBS box itself: `curl ifconfig.me`. (On 62/65 the operator's "OBS IP" was a LAN address; the real one was completely different.) |
+| Partner iframe "refused to connect" although their domain IS whitelisted | It's a **subdomain** (e.g. `admin.partner.com`); `(www\.)?partner\.com` does NOT match it — a subdomain is a distinct origin | Add the exact host to ALL THREE: referer map, origin map (gates `/ws`), CSP `frame-ancestors`. Verify: WS with that Origin → **400** (passed the gate, hit the handler) vs **403** (still blocked). |
+| Measuring audio shows `energy: 0` / "silent" but audio is actually fine | A fresh `AudioContext` starts **suspended** under autoplay policy → the analyser reads nothing | `await ctx.resume()` before measuring; only trust readings when `ctx.state === 'running'`. |
 | Black video, `ws` stuck 101/Pending | Stale Kurento pipeline (`MEDIA_OBJECT_NOT_FOUND`) after an OBS drop | Usually self-heals on the next viewer connect (addViewer detects + rebuilds). If it doesn't, restart signaling (`webrtc-simple`) → rebuilds pipelines. Or full-fleet-reboot. |
 | Admin shows source OFFLINE / bw=0 while OBS is live | collector fetches `/stat` over HTTPS; that node isn't on the SSL nginx.conf yet (`:80` only) | Run `setup-ssl.sh` first, or set `STAT_URL=http://127.0.0.1/stat` on a pre-SSL node |
 | Relay `/stat` bw_video=0 while origin LIVE | static pull armed before origin had a source | `sudo systemctl restart nginx` on the relay |
@@ -419,9 +512,15 @@ Origin-first ordering (relay re-pulls from a healthy source). Drops stream ~15-3
 **Golden rules:**
 - Signaling unit is **`webrtc-simple`** on every setup.sh box (62/64/65). `webrtc-swc` exists only on
   the hand-renamed node-63. Unsure? `systemctl list-units 'webrtc-s*' --type=service`.
-- Prefer nginx **reload** for config edits. **RESTART is required and safe** to (re)arm the relay
-  static pull (§5/§10.3) — `worker_processes 1` means no dup-:1935-master risk; that danger only
-  exists with `worker_processes auto`. Always verify `ps -C nginx | grep -c master == 1` after either.
+- **On an ORIGIN, use `restart`, not `reload`.** A reload strands the live OBS publish on a draining
+  worker → the source goes invisible (`bw_video=0`) while OBS still shows connected. `restart` is safe
+  (`worker_processes 1` = no dup-:1935-master; that danger only exists with `worker_processes auto`).
+  Restart is also what (re)arms a relay's static pull (§5/§10.3). After either, verify BOTH:
+  `ps -C nginx -o cmd | grep -c master` == 1 **and** `ps -C nginx -o cmd | grep -c 'shutting down'` == 0.
+- **Every origin nginx change costs an OBS reconnect.** Batch them and do them **before** an event,
+  never mid-stream. Expect 15-60s for OBS to come back; sometimes it needs a manual Start Streaming.
+- **`/embed` must be `no-store`.** It is the viewer client — a cached copy pins viewers to an old
+  player and you will debug a page they never loaded.
 - After any `scp` of a script to a node: `sed -i 's/\r$//'` (strip CRLF) before running.
 - Trust the **`bw_video` on `/stat`** and the **`playing`/`/count`** number over your eyes — a
   `<video>` shows the last frame frozen after the connection dies.
@@ -445,6 +544,9 @@ Origin-first ordering (relay re-pulls from a healthy source). Drops stream ~15-3
 | Ports | 1935 RTMP · 443 HTTPS · 80 HTTP/acme · 3478 TURN · 8888-8891 Kurento WS · 3000 signaling · 3001 /count · 3002 admin |
 | Kurento containers | `kurento-0..3` (`--network host`, WS 8888-8891) |
 | Deploy scripts | `deploy/setup.sh`, `setup-ssl.sh`, `setup-relay-node.sh`, `setup-admin.sh`, `full-fleet-reboot-onnode.sh` |
+| Viewer client | `public/embed.html` → `/var/www/webrtc-simple/embed.html`. **Must be served `no-store`.** Contains the `#soundBtn` unmute pill — a change here reaches viewers only if no-store is set. |
+| Audio path | OBS **AAC-LC stereo 44.1k** → RTMP → Kurento transcodes → **Opus 48k** → WebRTC. Codecs live in the container: `/etc/kurento/modules/kurento/SdpEndpoint.conf.json` (`numAudioMedias:1`). `passthrough.connect(endpoint)` with no media-type arg = audio **and** video. |
+| nginx backups | `nginx.conf.bak.*` — one per hand-edit (`.onpublish`, `.admindash`, `.adminperyago`, `.embednostore`, `.premute` for embed.html). `setup-ssl.sh` regen WIPES all hand edits; these are how you put them back. |
 
 ---
 
@@ -492,3 +594,64 @@ Building the fleet ≠ running the show. Before and during a live event:
   people `/embed`, never bare `/`.
 - **Free the RSS leak before the event** — `bash ~/full-fleet-reboot.sh` (§9). Only a Kurento
   container restart frees it.
+
+---
+
+## 15. Hard-won lessons — read before building the NEXT fleet
+
+Everything below cost real debugging time on 62/65 (and 63/64). None of it is obvious from the
+happy path.
+
+### The three that will waste your afternoon
+
+1. **The operator's "OBS IP" is usually wrong.** They report the machine's LAN address; the server
+   only ever sees the **NAT exit IP**. The publish-lock matches the exit IP, so OBS gets a 403 that
+   surfaces as *"Failed to connect — check your stream key"* (nothing to do with the key).
+   **Ground truth:** `journalctl -u webrtc-swc-admin | grep on_publish` → `<real-ip> -> DENY`.
+   Never seed `publishers.json` from a number someone recites; take it from that log, or run
+   `curl ifconfig.me` **on the OBS box**.
+
+2. **Every nginx reload on the ORIGIN silently kills the stream.** The publish stays pinned to a
+   `worker process is shutting down`, so `/stat` (served by the NEW worker) reports `bw_video=0`
+   and `nclients=0` while OBS still shows a healthy TCP connection. It looks exactly like a dead
+   encoder. Fix is `systemctl restart nginx`; the real fix is **don't touch origin nginx during an
+   event**. Batch every config edit (whitelist, on_publish, admin block, cache headers) into ONE
+   pre-event restart.
+
+3. **A viewer bug you cannot reproduce is probably a cached page.** `/embed` shipped with no
+   `Cache-Control`, so viewers held an old client indefinitely. The audio fix was deployed and
+   verified server-side while the operator still had a player with no unmute button. Set
+   `no-store` on `/embed` FIRST, before debugging anything the viewer reports.
+
+### Verification that actually proves something
+
+- **`bw_video` / `bw_audio` on `/stat` beat your eyes.** A `<video>` holds its last frame forever
+  after the connection dies; "I can see it" proves nothing.
+- **Pin the browser per node** — `--host-resolver-rules="MAP yourdomain.com <NODE_IP>"` — or DNS RR
+  will hand you the same node twice and you'll call the fleet verified.
+- **Desktop success does NOT prove TURN.** Chrome picks a direct candidate and masks a broken relay;
+  the mobile/Telegram/UDP-blocked viewers are the ones who suffer. Force
+  `iceTransportPolicy:'relay'` and require a `typ relay` candidate.
+- **`turnutils_uclient` false-fails** when coturn has `allowed-peer-ip` hardening: the test peer 403s
+  ("channel bind: Forbidden IP") even though TURN is fine. Use the browser relay-only test instead.
+- **Audio measurement lies if the AudioContext is suspended** (`peak: 0` = "silent"). `await
+  ctx.resume()` first, and only trust `ctx.state === 'running'`.
+- **A dead source makes everything downstream look broken.** Before blaming code: is `bw_video > 0`?
+
+### Design facts worth knowing up front
+
+- **TURN passwords may differ per node and that is FINE** — each client fetches creds from the node
+  that served it. What matters is that a node's coturn `user=` matches ITS OWN signaling `TURN_PASS`.
+  (On 62/65 they differ: node-62 kept its original password because it was upgraded in place.)
+- **Upgrading an existing box ≠ a fresh build.** `diff -rq` the repo `src/` against `/opt/...` first.
+  On node-62 the only difference was one NEW file (the admin collector), which the signaling unit
+  doesn't even load — so the "required" `systemctl restart webrtc-simple` was skipped entirely and
+  live viewers were never dropped. Check before you disrupt.
+- **Subdomains are separate origins.** `partner.com` in the whitelist does NOT admit
+  `admin.partner.com`. Add the exact host to referer map + origin map + CSP.
+- **Only add domains from the authoritative partner list.** Real traffic will show plenty of
+  lookalike domains (alt-TLDs of real partners, unknown re-embedders). They are 403ing correctly.
+  Adding one because "it appears in the logs" grants embed rights to a pirate.
+- **`setup-ssl.sh` overwrites `/etc/nginx/nginx.conf` wholesale** (it `cp`s the template, twice).
+  Every hand edit dies: on_publish, `/admin`, subdomain whitelist entries, cache headers. Back up
+  first, and re-apply after. A **reboot does NOT wipe them** — only an ssl regen does.

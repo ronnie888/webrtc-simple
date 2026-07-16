@@ -94,6 +94,11 @@ __PARTNERS_ORIGIN__
         # Token-gated embed page: served to anyone; access is enforced by the
         # token at the WS handshake (?lt=...), NOT by the referer whitelist.
         location = /embed {
+            # NEVER cache the viewer client. A cached copy pins viewers to an old
+            # player — a deployed fix (e.g. the unmute button) silently never
+            # reaches them and you end up debugging a page they never loaded.
+            add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+            add_header Pragma "no-cache" always;
             try_files /embed.html =404;
         }
 
