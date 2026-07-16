@@ -140,17 +140,32 @@
       iconSound.style.display = video.muted ? 'none' : '';
       soundBtn.setAttribute('aria-label', video.muted ? 'Unmute' : 'Mute');
     };
-    const toggleSound = (e) => {
+    // A tap must be IDEMPOTENT, not a blind toggle. touchend and click both fire
+    // on most touch browsers (preventDefault does not reliably suppress the
+    // ~300ms follow-up click in every webview), so a toggle would flip
+    // muted -> unmuted -> muted and the viewer hears nothing: indistinguishable
+    // from "the button does nothing". Coalesce anything within 500ms into one
+    // intent, and set the state explicitly instead of inverting it.
+    let lastTap = 0;
+    const applySound = (wantMuted, e) => {
       if (e) { e.preventDefault(); e.stopPropagation(); }
-      video.muted = !video.muted;
-      if (!video.muted) { video.volume = 1; video.play().catch(() => {}); }
+      const now = Date.now();
+      if (now - lastTap < 500) return;      // same physical tap, already handled
+      lastTap = now;
+      video.muted = wantMuted;
+      if (!wantMuted) {
+        video.volume = 1;                   // no-op on iOS (read-only), harmless
+        // MUST be called synchronously inside the gesture handler — iOS only
+        // honours the unmute if play() rides the same user gesture.
+        video.play().catch(() => {});
+      }
       paintSound();
     };
-    soundBtn.addEventListener('click', toggleSound);
-    // iOS in-app webviews can swallow the synthetic click; touchend is the
-    // gesture they actually honour for unmuting. preventDefault above stops the
-    // follow-up click from toggling straight back.
-    soundBtn.addEventListener('touchend', toggleSound, { passive: false });
+    const onTap = (e) => applySound(!video.muted, e);
+    soundBtn.addEventListener('click', onTap);
+    // iOS in-app webviews can swallow the synthetic click, so listen for the
+    // touch directly. The 500ms guard above makes the duplicate harmless.
+    soundBtn.addEventListener('touchend', onTap, { passive: false });
     // Some contexts (a partner page the user already clicked in) permit sound
     // right away — try it, and silently keep muted if the browser refuses.
     const tryAutoUnmute = () => {
