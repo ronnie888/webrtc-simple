@@ -85,10 +85,15 @@ __PARTNERS_ORIGIN__
         # Browser-enforced embed control: only these origins may frame us.
         add_header Content-Security-Policy "frame-ancestors __PARTNERS_CSP__;" always;
 
-        # Plain viewer: partner-iframe only (referer gate).
+        # Plain viewer: partner-iframe only (referer gate). Serves the SAME page
+        # as /embed — one viewer client, so the sound button and every future fix
+        # land here too. (viewer.html is the bare debug page: native controls and
+        # an ICE-state readout. It is not what a partner should ever show.)
         location = / {
             if ($embed_ok = 0) { return 403; }
-            try_files /viewer.html =404;
+            add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+            add_header Pragma "no-cache" always;
+            try_files /embed.html =404;
         }
 
         # Token-gated embed page: served to anyone; access is enforced by the
