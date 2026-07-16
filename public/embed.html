@@ -160,7 +160,12 @@
         // If it is refused anyway, unmuting has ALREADY paused playback, so
         // undo it: a frozen picture is far worse than a silent one. Video wins.
         video.play().catch(() => {
+          // Refused. Unmuting already paused playback, so undo it — a frozen
+          // picture is worse than a silent one. lastTap is cleared so the NEXT
+          // gesture gets a fresh attempt instead of being swallowed by the
+          // coalescing window; on mobile the 2nd or 3rd tap often succeeds.
           video.muted = true;
+          lastTap = 0;
           video.play().catch(() => {});     // muted playback is always allowed
           paintSound();
         });
@@ -185,6 +190,22 @@
     // iOS in-app webviews can swallow the synthetic click, so listen for the
     // touch directly. The 500ms guard above makes the duplicate harmless.
     soundBtn.addEventListener('touchend', onTap, { passive: false });
+
+    // ---- catch-all unmute ----
+    // Do not make sound depend on hitting one small target. While muted, ANY
+    // touch/click anywhere on the player counts as "I want sound" — every
+    // gesture is a chance the browser will grant audio, and on Android/iOS/
+    // Telegram webviews the pill tap alone was not getting there. Listening on
+    // the window in the CAPTURE phase also catches gestures the video element
+    // (pointer-events:none) would otherwise swallow.
+    // Only ever UNMUTES — muting stays deliberate, via the button.
+    const catchAllUnmute = (e) => {
+      if (!video.muted) return;                       // already on: ignore
+      if (e && e.target && e.target.closest && e.target.closest('#soundBtn')) return; // button handles itself
+      applySound(false, null);                        // don't preventDefault: leave the page usable
+    };
+    ['touchend', 'pointerup', 'click'].forEach((evt) =>
+      window.addEventListener(evt, catchAllUnmute, { capture: true, passive: true }));
     // Some contexts (a partner page the user already clicked in) permit sound
     // right away — try it, and silently keep muted if the browser refuses.
     const tryAutoUnmute = () => {
