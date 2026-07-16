@@ -1,0 +1,6 @@
+# Shell scripts and configs are deployed to Linux — force LF, always.
+# CRLF here breaks `set -o pipefail` etc. when the box runs them (bit node-66).
+*.sh   text eol=lf
+*.conf text eol=lf
+deploy/turnserver.conf text eol=lf
+deploy/*.service       text eol=lf
