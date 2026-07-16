@@ -46,20 +46,24 @@
        pointer-events:none (no native menu/scrub), so this is how a viewer
        supplies the user-gesture browsers require to allow audio. */
     #soundBtn {
-      position: absolute; z-index: 150;   /* absolute, NOT fixed — see body note */
+      position: absolute; z-index: 2147483647;  /* above any partner overlay */
       display: none;                      /* shown once a track is playing */
       align-items: center; gap: 9px;
       border: 0; color: #fff; cursor: pointer;
-      backdrop-filter: blur(6px);
       -webkit-tap-highlight-color: transparent;
       transition: background 0.15s, opacity 0.3s;
+      /* Deliberately plain: no backdrop-filter (unsupported in some Android
+         WebViews, where it can render the element invisible), no exotic
+         properties. This button is the only way to sound — it must paint
+         everywhere, including old in-app webviews. */
+      visibility: visible; opacity: 1;
     }
     #soundBtn.show { display: inline-flex; }
     #soundBtn svg { fill: currentColor; flex: none; }
     /* MUTED = big, dead-centre, impossible to miss: viewers must know they are
        missing audio and where to tap. */
     #soundBtn.muted {
-      left: 50%; top: 50%; transform: translate(-50%, -50%);
+      left: 50%; top: 50%; bottom: auto; transform: translate(-50%, -50%);
       padding: 16px 26px; border-radius: 999px;
       background: rgba(220,38,38,0.92);
       font: 700 17px/1 system-ui, sans-serif;
@@ -85,9 +89,12 @@
     @media (prefers-reduced-motion: reduce) {
       #soundBtn.muted { animation: none; }
     }
-    /* UNMUTED = small, out of the way, bottom-left toggle. */
+    /* UNMUTED = small, out of the way, bottom-left toggle.
+       NOTE both state rules must clear the other's offsets explicitly — a
+       leftover `top:50%` here (or `bottom:12px` on .muted) would drag the pill
+       off the player. Do not rely on source order to sort this out. */
     #soundBtn:not(.muted) {
-      left: 12px; bottom: 12px;
+      left: 12px; bottom: 12px; top: auto; transform: none;
       padding: 9px 12px; border-radius: 999px;
       background: rgba(0,0,0,0.62);
       font: 600 13px/1 system-ui, sans-serif;
@@ -225,6 +232,28 @@
     // until something calls play(), so gating on it deadlocks — no picture means
     // no pill, no pill means no tap, no tap means no play.
     const showSound = () => { soundBtn.classList.add('show'); paintSound(); };
+
+    // ?diag=1 — on-screen readout for debugging a device we cannot inspect
+    // (Android/iOS in-app webviews with no devtools). Shows whether the page,
+    // the track and the pill are actually there.
+    if (new URLSearchParams(location.search).get('diag') === '1') {
+      const d = document.createElement('div');
+      d.style.cssText = 'position:absolute;top:0;left:0;right:0;z-index:2147483647;' +
+        'background:rgba(0,0,0,.85);color:#0f0;font:11px/1.5 monospace;padding:6px;' +
+        'white-space:pre-wrap;pointer-events:none';
+      document.body.appendChild(d);
+      setInterval(() => {
+        const r = soundBtn.getBoundingClientRect();
+        const at = video.srcObject && video.srcObject.getAudioTracks()[0];
+        d.textContent =
+          'BUILD 2026-07-16-c  ' + innerWidth + 'x' + innerHeight + '\n' +
+          'video rs=' + video.readyState + ' ' + video.videoWidth + 'x' + video.videoHeight +
+          ' muted=' + video.muted + ' paused=' + video.paused + '\n' +
+          'audioTrack=' + (at ? at.readyState + ' enabled=' + at.enabled + ' trackMuted=' + at.muted : 'NONE') + '\n' +
+          'pill cls="' + soundBtn.className + '" disp=' + getComputedStyle(soundBtn).display +
+          ' rect=' + Math.round(r.left) + ',' + Math.round(r.top) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height);
+      }, 500);
+    }
 
     // Token from ?lt= forwarded to the WS connect; server enforces it at the handshake.
     const lt = new URLSearchParams(location.search).get('lt') || '';
