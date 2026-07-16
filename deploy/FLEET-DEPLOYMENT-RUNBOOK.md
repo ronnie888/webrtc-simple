@@ -492,6 +492,7 @@ Origin-first ordering (relay re-pulls from a healthy source). Drops stream ~15-3
 | Symptom | Cause | Fix |
 |---|---|---|
 | **NO AUDIO** (video fine) | `embed.html` `<video>` is `muted` AND has `pointer-events:none`, so nothing can unmute it | Already fixed: `#soundBtn` (centre pill). If it regresses, check the served page has `soundBtn`. **Diagnose in this order:** `/stat` `<audio>` block + `bw_audio` (is OBS even sending?) → Kurento `SdpEndpoint.conf.json` (`numAudioMedias:1`, `opus/48000/2`) → client `muted`. Do NOT just delete `muted` — autoplay-with-sound is blocked, you'd lose video too. |
+| Viewer reports a client bug you CANNOT reproduce (no pill, no audio) on a device you can't inspect | **They are on a stale build.** `no-store` does not evict a copy the webview already holds | **Check delivery before theorising:** `sudo grep '<their-ip>' /var/log/nginx/access.log \| grep 'GET /embed'` — the number after `200` is the bytes served; compare to `stat -c %s /var/www/webrtc-simple/embed.html`. Force a fresh copy with any new query string: `/embed?v=2`. Use `/embed?diag=1` for an on-screen readout. This exact trap burned four rounds of CSS "fixes" for a phantom. |
 | A code/page change "didn't deploy" — viewers still see the old player | `/embed` had **no `Cache-Control`** (only ETag/Last-Modified) → browsers cache the viewer client | `location = /embed` must send `Cache-Control: no-store, no-cache, must-revalidate`. Verify: `curl -skI https://localhost/embed -H 'Referer: https://<partner>/' \| grep -i cache-control`. Without it you will chase phantom bugs on a page the viewer never received. |
 | **nginx RELOAD on the ORIGIN kills the source** (`bw_video=0`, `nclients=0`) while OBS TCP is still ESTAB | nginx-rtmp does NOT migrate a publish to the new worker; OBS stays pinned to a `worker process is shutting down` | `sudo systemctl restart nginx` (safe: `worker_processes 1` = no dup-master). OBS reconnects in ~15-60s. **On an origin, prefer restart over reload, and batch config edits PRE-EVENT.** Check for the stranding: `ps -C nginx -o cmd \| grep -c 'shutting down'` must be 0. |
 | **OBS "Failed to connect / check your stream key"** with the allowlist on | The lock matches the **NAT exit IP**, not the LAN IP the operator sees | `journalctl -u webrtc-swc-admin \| grep on_publish` prints the REAL arriving IP (`… -> DENY`). Add THAT. Confirm from the OBS box itself: `curl ifconfig.me`. (On 62/65 the operator's "OBS IP" was a LAN address; the real one was completely different.) |
@@ -618,10 +619,30 @@ happy path.
    event**. Batch every config edit (whitelist, on_publish, admin block, cache headers) into ONE
    pre-event restart.
 
-3. **A viewer bug you cannot reproduce is probably a cached page.** `/embed` shipped with no
-   `Cache-Control`, so viewers held an old client indefinitely. The audio fix was deployed and
-   verified server-side while the operator still had a player with no unmute button. Set
-   `no-store` on `/embed` FIRST, before debugging anything the viewer reports.
+3. **A viewer bug you cannot reproduce is probably a cached page — PROVE DELIVERY FIRST.**
+   `/embed` shipped with no `Cache-Control`, so viewers held an old client indefinitely. This cost
+   hours twice: an audio fix was deployed and verified server-side while the operator still had a
+   player with no unmute button, and later "no pill on Android/iOS/Telegram" survived four rounds of
+   CSS fixes — because every report came from a **stale build**, not from the code being tested.
+
+   nginx's own log answers it in one command — it records the **bytes served** per request:
+   ```bash
+   # what did THAT device actually receive?
+   sudo grep '<their-ip>' /var/log/nginx/access.log | grep 'GET /embed' | tail
+   # are mobiles on the current build at all?
+   sudo grep 'GET /embed' /var/log/nginx/access.log | tail -150 \
+     | grep -iE 'android|iphone' | grep -oE '" 200 [0-9]+' | sort | uniq -c
+   ```
+   Every row must show the CURRENT `stat -c %s /var/www/webrtc-simple/embed.html`. Anything smaller
+   is a stale client, and your fix is not the thing being tested.
+
+   ⚠️ **`no-store` only affects FUTURE fetches — it cannot evict a copy a webview already holds.**
+   To force one device: add any new query string (`/embed?v=2`). That single trick ended a
+   multi-hour hunt: the pill appeared instantly, on all three platforms, including through a real
+   partner iframe.
+
+   `/embed?diag=1` paints an on-screen readout (build id, viewport, video readyState, audio track
+   state, pill class/display/rect) for devices with no devtools — ask for a screenshot.
 
 ### Verification that actually proves something
 
