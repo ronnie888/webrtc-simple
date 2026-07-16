@@ -11,7 +11,13 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "== 1. system packages =="
 sudo apt-get update
-sudo apt-get install -y nginx libnginx-mod-rtmp coturn nodejs npm curl
+# NOTE: do NOT apt-install `npm`. On a box that already has Node from NodeSource
+# (nodejs 20+, its own bundled npm), Ubuntu's `npm` package Conflicts: nodejs and
+# apt bails with "held broken packages" — 0 Kurento, setup dead (bit node-68).
+# nodejs from any source already ships npm; we only need node present. If nodejs
+# is absent, the nodejs package provides both.
+sudo apt-get install -y nginx libnginx-mod-rtmp coturn nodejs curl
+command -v npm >/dev/null || sudo apt-get install -y npm    # only if node's npm is somehow missing
 
 echo "== 2. docker + kurento (N instances) =="
 if ! command -v docker >/dev/null; then curl -fsSL https://get.docker.com | sudo sh; fi
