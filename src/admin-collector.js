@@ -90,12 +90,21 @@ function parseDockerStats(out) {
 function deriveHealth({ stat, count, kurento, host, role = NODE_ROLE }) {
   const viewers = count && typeof count.viewers === 'number' ? count.viewers : 0;
   const publishing = stat.publishers > 0;
-  const sourceLive = publishing && stat.bwVideo > 0;
+  const kurentoUnhealthy = kurento.filter((k) => k.unhealthy).length;
+  // ORIGIN: sourceLive requires local nginx-rtmp seeing OBS with real bytes.
+  // RELAY:  cannot measure directly — Kurento pulls the upstream directly,
+  //         bypassing local nginx-rtmp (so its /stat is always 0). Treat
+  //         healthy Kurento as LIVE (fleet-ready to serve). Viewer count is
+  //         a separate metric — 0 viewers on a healthy relay = idle, not
+  //         broken. Prevents the misleading OFFLINE red on healthy relays.
+  const sourceLive = role === 'origin'
+    ? (publishing && stat.bwVideo > 0)
+    : (kurentoUnhealthy === 0 && kurento.length > 0);
+  const sourceReady = false;
   // DEAD = publishing but zero video (black screen). Only meaningful on an
   // ORIGIN (local OBS crashed). On a RELAY there is no local OBS to die — a
   // stale <publishing/> with bw=0 just means the upstream is idle → OFFLINE.
   const sourceDead = role === 'origin' && publishing && stat.bwVideo === 0;
-  const kurentoUnhealthy = kurento.filter((k) => k.unhealthy).length;
   const loadPct = host.cores ? (host.load1 / host.cores) * 100 : 0;
   const memPct = host.memTotal ? (host.memUsed / host.memTotal) * 100 : 0;
   // A connected viewer is not necessarily WATCHING anything: when the source is
@@ -123,7 +132,7 @@ function deriveHealth({ stat, count, kurento, host, role = NODE_ROLE }) {
   return {
     status,
     role,
-    source: sourceDead ? 'DEAD' : sourceLive ? 'LIVE' : 'OFFLINE',
+    source: sourceDead ? 'DEAD' : sourceLive ? 'LIVE' : sourceReady ? 'READY' : 'OFFLINE',
     viewers,        // connected (honest total — real WS/endpoints)
     playing,        // connected AND the source is live = actually watching
     idle,           // connected but nothing to watch (source off)

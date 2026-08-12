@@ -71,10 +71,24 @@ test('deriveHealth: origin publishing but bw_video 0 -> DEAD + DEGRADED', () => 
   assert.strictEqual(h.status, 'DEGRADED');
 });
 
-test('deriveHealth: RELAY with stale publishing+bw0 -> OFFLINE not DEAD (no local OBS to die)', () => {
+// A relay has no local OBS that could die, so a stale publishing+bw0 must never
+// read DEAD. It reports LIVE off healthy Kurento: on the fleets where Kurento
+// pulls the origin directly, the relay's own nginx-rtmp /stat is always 0, and
+// judging by it painted every healthy relay OFFLINE-red.
+test('deriveHealth: RELAY with stale publishing+bw0 -> LIVE off healthy Kurento, never DEAD', () => {
   const h = deriveHealth({ stat: parseStat(STAT_DEAD), count: { viewers: 0 }, kurento: K_HEALTHY, host: HOST, role: 'relay' });
-  assert.strictEqual(h.source, 'OFFLINE');
+  assert.strictEqual(h.source, 'LIVE');
   assert.strictEqual(h.status, 'HEALTHY');
+});
+
+// ...but a relay whose Kurento is gone has no way to serve, so it must not
+// claim LIVE. This is the guard that keeps the rule above from meaning
+// "relays are always LIVE".
+test('deriveHealth: RELAY with no healthy Kurento -> not LIVE', () => {
+  const dead = K_HEALTHY.map((x) => ({ ...x, unhealthy: true }));
+  const h = deriveHealth({ stat: parseStat(STAT_DEAD), count: { viewers: 0 }, kurento: dead, host: HOST, role: 'relay' });
+  assert.notStrictEqual(h.source, 'LIVE');
+  assert.strictEqual(h.status, 'DEGRADED');
 });
 
 test('deriveHealth: near peak flags at >=70% ceiling', () => {
