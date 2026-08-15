@@ -86,28 +86,57 @@ def patch_favicon(s):
 
 
 # --------------------------------------------------------------- embed gate
+def embed_anchor(s):
+    """Locate the anchor inside the ALLOWED array.
+
+    Two shapes occur in the wild: the anchor alone on its line (enumero) or
+    packed mid-line with other domains (sabongflix). Prefer the own-line form
+    so the insert stays readable, else fall back to the packed one. Returns
+    (end_offset, indent) or None.
+    """
+    own = re.search(r"^([ \t]*)'" + re.escape(ANCHOR) + r"',[ \t]*$", s, re.M)
+    if own:
+        return own.end(), own.group(1)
+    # Packed: 'a','anchor','b'  — or last in the array with no trailing comma.
+    packed = re.search(r"'" + re.escape(ANCHOR) + r"',?", s)
+    if not packed:
+        return None
+    line_start = s.rfind('\n', 0, packed.start()) + 1
+    ind = re.match(r'[ \t]*', s[line_start:]).group(0)
+    # Insert after the anchor's whole line, not mid-line, to keep the array tidy.
+    line_end = s.find('\n', packed.end())
+    if line_end == -1:
+        line_end = packed.end()
+    needs_comma = not s[packed.start():line_end].rstrip().endswith(',')
+    return line_end, ind, needs_comma, line_end
+
+
 def patch_embed(s):
-    """Add the domains to the ALLOWED array, on their own line after the anchor."""
-    m = re.search(r"^([ \t]*)'" + re.escape(ANCHOR) + r"',\s*$", s, re.M)
-    if not m:
+    """Add the domains to the ALLOWED array on their own line after the anchor."""
+    found = embed_anchor(s)
+    if not found:
         raise SystemExit(f'FATAL: ALLOWED entry for {ANCHOR} not found in embed.html')
-    ind = m.group(1)
-    line = ind + ','.join(f"'{d}'" for d in NEW) + ','
-    return s[:m.end()] + '\n' + line + s[m.end():]
+    if len(found) == 2:
+        end, ind = found
+        return s[:end] + '\n' + ind + ','.join(f"'{d}'" for d in NEW) + ',' + s[end:]
+    end, ind, needs_comma, _ = found
+    # The anchor's line may be the array's last entry (no trailing comma); add
+    # one so the appended line is valid JS rather than a syntax error.
+    lead = ',' if needs_comma else ''
+    return s[:end] + lead + '\n' + ind + ','.join(f"'{d}'" for d in NEW) + s[end:]
 
 
 def main():
     # Validate BOTH files before writing EITHER. A mid-run abort used to leave
     # nginx patched and embed.html untouched, which is the one state that looks
     # deployed while the JS gate still rejects the new partner.
-    if not all(d in open(EMBED).read() for d in NEW):
-        e_probe = open(EMBED).read()
-        if not re.search(r"^([ \t]*)'" + re.escape(ANCHOR) + r"',\s*$", e_probe, re.M):
+    if not all(d in open(EMBED, encoding='utf-8').read() for d in NEW):
+        if not embed_anchor(open(EMBED, encoding='utf-8').read()):
             raise SystemExit(f'FATAL: ALLOWED entry for {ANCHOR} not found in {EMBED} '
-                             f'- pick an anchor that is on its own line. Nothing written.')
+                             f'- pick an anchor already in the array. Nothing written.')
 
     # ---- nginx ----
-    src = open(NGINX).read()
+    src = open(NGINX, encoding='utf-8').read()
     orig = src
     if all(d in src for d in NEW):
         print('nginx: domains already present, skipping maps+CSP')
@@ -129,19 +158,19 @@ def main():
         if len(src) < len(orig):
             raise SystemExit('FATAL: config SHRANK - refusing to write')
         print('nginx backup:', backup(NGINX))
-        open(NGINX, 'w').write(src)
+        open(NGINX, 'w', encoding='utf-8', newline='').write(src)
         print(f'nginx: written ({len(orig)} -> {len(src)} bytes)')
     else:
         print('nginx: no change needed')
 
     # ---- embed.html ----
-    e = open(EMBED).read()
+    e = open(EMBED, encoding='utf-8').read()
     if all(d in e for d in NEW):
         print('embed: domains already present, skipping')
     else:
         new_e = patch_embed(e)
         print('embed backup:', backup(EMBED))
-        open(EMBED, 'w').write(new_e)
+        open(EMBED, 'w', encoding='utf-8', newline='').write(new_e)
         print(f'embed: written ({len(e)} -> {len(new_e)} bytes)')
         changed.append('embed')
 
