@@ -107,8 +107,16 @@ def embed_anchor(s):
     line_end = s.find('\n', packed.end())
     if line_end == -1:
         line_end = packed.end()
-    needs_comma = not s[packed.start():line_end].rstrip().endswith(',')
-    return line_end, ind, needs_comma, line_end
+    # Whether the INSERTED line needs a trailing comma depends on what follows
+    # it, not on the anchor's own line. If more entries come after, the new line
+    # must end with a comma or it abuts the next string and the whole script is
+    # a SyntaxError - which blanks the player, not just the gate.
+    rest = s[line_end:]
+    close = rest.find(']')
+    more_entries_follow = "'" in rest[:close] if close != -1 else False
+    # The anchor's line itself must also end with a comma before we append.
+    lead = '' if s[line_start:line_end].rstrip().endswith(',') else ','
+    return line_end, ind, lead, more_entries_follow
 
 
 def patch_embed(s):
@@ -119,11 +127,10 @@ def patch_embed(s):
     if len(found) == 2:
         end, ind = found
         return s[:end] + '\n' + ind + ','.join(f"'{d}'" for d in NEW) + ',' + s[end:]
-    end, ind, needs_comma, _ = found
-    # The anchor's line may be the array's last entry (no trailing comma); add
-    # one so the appended line is valid JS rather than a syntax error.
-    lead = ',' if needs_comma else ''
-    return s[:end] + lead + '\n' + ind + ','.join(f"'{d}'" for d in NEW) + s[end:]
+    end, ind, lead, more_entries_follow = found
+    tail = ',' if more_entries_follow else ''
+    return (s[:end] + lead + '\n' + ind
+            + ','.join(f"'{d}'" for d in NEW) + tail + s[end:])
 
 
 def main():
