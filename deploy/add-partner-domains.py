@@ -38,8 +38,12 @@ def patch_maps(s):
     node actually uses instead of assuming."""
     esc = ANCHOR.replace('.', r'\.')
     # Match the anchor line in either escaped or unescaped form, keep its indent.
+    # The tail captures any suffix between the domain and the `1;` — some fleets
+    # (mystreamingserver, enumero) end lines with `(:\d+)?(/.*)?$  1;` or
+    # `(:\d+)?$  1;`, others (sabongflix) end with just `  1;`. Preserving
+    # whatever this file uses keeps the twin line matching its map's style.
     pat = re.compile(
-        r'^([ \t]*~\*\^https\?://\(www\\\.\)\?)(' + re.escape(ANCHOR) + '|' + re.escape(esc) + r')(\s+1;)$',
+        r'^([ \t]*~\*\^https\?://\(www\\\.\)\?)(' + re.escape(ANCHOR) + '|' + re.escape(esc) + r')(\S*\s+1;)$',
         re.M)
     hits = pat.findall(s)
     if not hits:
